@@ -17,7 +17,29 @@ st.markdown("Compare and merge PDFs easily!")
 # --- Sidebar for Navigation ---
 page = st.sidebar.radio("Navigation", ["Home", "Single Comparison", "Bulk Comparison", "Help"])
 
-# --- OCR-based Helper Functions ---
+# ✅ --- Helper: Normalize Numbers ---
+def normalize_number(value: str) -> float:
+    """Clean and standardize a numeric string into a float."""
+    value = value.strip().replace("\u200b", "")  # remove hidden spaces
+    value = re.sub(r"[^\d,\.]", "", value)  # keep only digits, dots, commas
+
+    # Handle Indonesian & Western formats
+    if "," in value and "." in value:
+        # e.g., "5.471.200,50" → "5471200.50"
+        value = value.replace(".", "").replace(",", ".")
+    elif "," in value and "." not in value:
+        # e.g., "541,200" (Indonesian thousand separator) → "541200"
+        value = value.replace(",", "")
+    else:
+        # e.g., "5.471.200" (Indonesian thousand separator) → "5471200"
+        value = value.replace(".", "")
+
+    try:
+        return float(value)
+    except ValueError:
+        return -1.0
+
+# ✅ --- OCR-based Helper Functions ---
 def extract_value_from_pdf(pdf_bytes, keyword: str) -> float:
     """Extract numeric value after a given keyword using OCR."""
     try:
@@ -26,26 +48,27 @@ def extract_value_from_pdf(pdf_bytes, keyword: str) -> float:
         for page in pages:
             ocr_text += pytesseract.image_to_string(page, lang="eng") + "\n"
 
-        # Normalize text: unify formats like 1.000.000 -> 1000000, 1,000.00 -> 1000.00
-        text_clean = ocr_text.replace(".", "").replace(",", ".")
-        
-        # Flexible pattern: keyword followed by a number (supports floats)
-        pattern = rf"{re.escape(keyword)}[^\d]*(\d+(?:\.\d+)?)"
-        value_match = re.search(pattern, text_clean, re.IGNORECASE)
-        
+        # Search for the keyword followed by a number
+        pattern = rf"{re.escape(keyword)}[^\d]*(\d+[.,\d]*)"
+        value_match = re.search(pattern, ocr_text, re.IGNORECASE)
+
         if value_match:
-            value = float(value_match.group(1))
-            return value
+            raw_value = value_match.group(1)
+            normalized = normalize_number(raw_value)
+            st.write(f"🔍 Extracted for '{keyword}': '{raw_value}' → {normalized}")
+            return normalized
 
     except Exception as e:
         st.error(f"Error extracting value (OCR): {e}")
-    return -1
+    return -1.0
 
 def compare_pdf_values(invoice_bytes, facture_bytes, inv_kw1, inv_kw2, fac_kw1, fac_kw2):
+    """Compare extracted values from two PDFs."""
     invoice_value1 = extract_value_from_pdf(invoice_bytes, inv_kw1)
     invoice_value2 = extract_value_from_pdf(invoice_bytes, inv_kw2)
     facture_value1 = extract_value_from_pdf(facture_bytes, fac_kw1)
     facture_value2 = extract_value_from_pdf(facture_bytes, fac_kw2)
+
     return invoice_value1 == facture_value1 and invoice_value2 == facture_value2
 
 def merge_pdfs(pdf1_bytes, pdf2_bytes):
