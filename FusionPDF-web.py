@@ -33,21 +33,24 @@ def extract_value_from_pdf_text(pdf_bytes, keyword: str) -> float:
 
         for i, line in enumerate(lines):
             if re.search(re.escape(keyword), line, re.IGNORECASE):
-                # Look for numbers on same or next line
+                # Candidate lines: same + next few lines (catch multi-line VAT layouts)
                 candidate_lines = [line]
-                if i + 1 < len(lines):
-                    candidate_lines.append(lines[i + 1])
+                for j in range(1, 3):
+                    if i + j < len(lines):
+                        candidate_lines.append(lines[i + j])
+
+                # Find all numbers ≥ 3 digits long (avoid "2%" or "1.0")
                 for l in candidate_lines:
-                    numbers = re.findall(r"(\d[\d.,]*)", l)
+                    numbers = re.findall(r"\b\d{3,}[\d.,]*\b", l)
                     if numbers:
+                        # Use the last one (rightmost) as total
                         val = normalize_number(numbers[-1])
-                        if val is not None:
+                        if val:
                             return val
         return None
     except Exception as e:
         st.error(f"Extraction error: {e}")
         return None
-
 
 def compare_pdf_values(invoice_bytes, facture_bytes, inv_kw1, inv_kw2, fac_kw1, fac_kw2):
     """Extract and compare values."""
