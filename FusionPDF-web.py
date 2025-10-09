@@ -4,76 +4,76 @@ import re
 from pdf2image import convert_from_bytes
 from PIL import Image
 import io
-import tempfile
-import os
 import zipfile
 import pytesseract
 
 st.set_page_config(page_title="FusionPDF", page_icon="📄", layout="wide")
-
 st.title("📄 FusionPDF by Anna")
 st.markdown("Compare and merge PDFs easily!")
 
-# --- Sidebar Navigation ---
+# --- Sidebar ---
 page = st.sidebar.radio("Navigation", ["Home", "Single Comparison", "Bulk Comparison", "Help"])
 
-
-# ============================================================
-# ----------------- HELPER FUNCTIONS -------------------------
-# ============================================================
-
-def extract_text_from_pdf(pdf_bytes):
-    """Try to extract text directly; fall back to OCR if blank or too short."""
+# --- OCR-based helper functions ---
+def extract_text_from_pdf(pdf_bytes: bytes) -> str:
+    """Try PyPDF2 first; fallback to OCR if text extraction is empty."""
     text = ""
     try:
         reader = PyPDF2.PdfReader(io.BytesIO(pdf_bytes))
         for page in reader.pages:
-            text += page.extract_text() or ""
+            page_text = page.extract_text() or ""
+            text += page_text + "\n"
     except Exception:
-        pass
+        text = ""
 
-    # If text extraction fails or is too short, fall back to OCR
-    if len(text.strip()) < 100:
+    # If extraction failed or text too short, fallback to OCR
+    if len(text.strip()) < 50:
         try:
             pages = convert_from_bytes(pdf_bytes, dpi=200)
-            ocr_text = ""
             for page in pages:
-                ocr_text += pytesseract.image_to_string(page, lang="eng") + "\n"
-            text = ocr_text
+                text += pytesseract.image_to_string(page, lang="eng") + "\n"
         except Exception as e:
-            st.error(f"OCR failed: {e}")
-
+            st.error(f"OCR extraction failed: {e}")
     return text
 
 
 def extract_value(text: str, label: str) -> float:
-    """Extract numeric value after a given label using regex."""
-    # Normalize decimal and thousand separators
-    text_clean = text.replace('.', '').replace(',', '.')
-    pattern = rf"{re.escape(label)}[^\d]*(\d+(?:\.\d+)?)"
-    match = re.search(pattern, text_clean, re.IGNORECASE | re.DOTALL)
-    if match:
-        try:
-            return float(match.group(1))
-        except ValueError:
-            return None
+    """Extract numeric value near a label (same or next line)."""
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        if re.search(re.escape(label), line, re.IGNORECASE):
+            # Look for number on the same line
+            match = re.search(r"(\d[\d.,]{2,})", line)
+            # If not on same line, check next few lines
+            if not match:
+                for j in range(1, 3):
+                    if i + j < len(lines):
+                        match = re.search(r"(\d[\d.,]{2,})", lines[i + j])
+                        if match:
+                            break
+            if match:
+                num_str = re.sub(r"[^\d.,]", "", match.group(1))
+                num_str = num_str.replace(".", "").replace(",", ".")
+                try:
+                    return float(num_str)
+                except ValueError:
+                    return None
     return None
 
 
-def extract_pdf_values(pdf_bytes, keywords):
-    """Extract multiple labeled values from one PDF."""
+def extract_value_from_pdf(pdf_bytes, label):
     text = extract_text_from_pdf(pdf_bytes)
-    return {kw: extract_value(text, kw) for kw in keywords}
+    return extract_value(text, label)
 
 
-def compare_with_tolerance(val1, val2, tolerance=2.0):
-    """Compare floats with tolerance to allow small OCR/extraction errors."""
+def compare_values(val1, val2, tolerance=0.01):
+    """Compare two float values within tolerance."""
     if val1 is None or val2 is None:
-        return "MISSING"
-    if abs(val1 - val2) <= tolerance:
-        return "MATCH"
-    else:
-        return f"DIFF ({val1 - val2:+.2f})"
+        return False
+    if val2 == 0:
+        return abs(val1 - val2) < tolerance
+    diff_ratio = abs(val1 - val2) / val2
+    return diff_ratio < 0.005  # within 0.5%
 
 
 def merge_pdfs(pdf1_bytes, pdf2_bytes):
@@ -94,20 +94,26 @@ def preview_pdf_side_by_side(invoice_bytes, facture_bytes):
         inv_img = convert_from_bytes(invoice_bytes, dpi=100)[0]
         buf = io.BytesIO()
         inv_img.save(buf, format="PNG")
-        with col1:
-            st.image(buf, width=300, caption="Invoice PDF")
+        col1.image(buf, width=300, caption="Invoice PDF")
     if facture_bytes:
         fac_img = convert_from_bytes(facture_bytes, dpi=100)[0]
         buf = io.BytesIO()
         fac_img.save(buf, format="PNG")
-        with col2:
-            st.image(buf, width=300, caption="Facture PDF")
+        col2.image(buf, width=300, caption="Facture PDF")
 
 
-# ============================================================
-# ----------------- PAGE LOGIC -------------------------------
-# ============================================================
+def display_extracted(invoice_data, facture_data):
+    st.subheader("Extracted Values:")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("**Invoice**")
+        st.json(invoice_data)
+    with col2:
+        st.markdown("**Facture**")
+        st.json(facture_data)
 
+
+# --- Pages ---
 if page == "Home":
     st.subheader("Welcome to FusionPDF!")
     st.write("Choose an option from the sidebar to get started.")
@@ -124,7 +130,7 @@ elif page == "Single Comparison":
         inv_kw2 = st.text_input("Invoice Keyword 2", "VAT")
     with col2:
         fac_kw1 = st.text_input("Facture Keyword 1", "Harga Jual / Penggantian / Uang Muka / Termin")
-        fac_kw2 = st.text_input("Facture Keyword 2", "Jumlah PPN")
+        fac_kw2 = st.text_input("Facture Keyword 2", "Jumlah PPN (Pajak Pertambahan Nilai)")
 
     if invoice_pdf and facture_pdf:
         st.subheader("📑 Preview PDFs")
@@ -136,34 +142,34 @@ elif page == "Single Comparison":
         if not (invoice_pdf and facture_pdf):
             st.warning("Please upload both PDFs first.")
         else:
-            invoice_bytes = invoice_pdf.read()
-            facture_bytes = facture_pdf.read()
+            inv_bytes = invoice_pdf.read()
+            fac_bytes = facture_pdf.read()
 
-            # Extract values
-            inv_vals = extract_pdf_values(invoice_bytes, [inv_kw1, inv_kw2])
-            fac_vals = extract_pdf_values(facture_bytes, [fac_kw1, fac_kw2])
+            inv_text = extract_text_from_pdf(inv_bytes)
+            fac_text = extract_text_from_pdf(fac_bytes)
 
-            # Compare
-            result1 = compare_with_tolerance(inv_vals[inv_kw1], fac_vals[fac_kw1])
-            result2 = compare_with_tolerance(inv_vals[inv_kw2], fac_vals[fac_kw2])
+            inv_values = {
+                inv_kw1: extract_value(inv_text, inv_kw1),
+                inv_kw2: extract_value(inv_text, inv_kw2),
+            }
+            fac_values = {
+                fac_kw1: extract_value(fac_text, fac_kw1),
+                fac_kw2: extract_value(fac_text, fac_kw2),
+            }
 
-            st.write("### Extracted Values:")
-            col1, col2 = st.columns(2)
-            with col1:
-                st.write("**Invoice**")
-                st.json(inv_vals)
-            with col2:
-                st.write("**Facture**")
-                st.json(fac_vals)
+            display_extracted(inv_values, fac_values)
 
-            if result1.startswith("MATCH") and result2.startswith("MATCH"):
+            match1 = compare_values(inv_values[inv_kw1], fac_values[fac_kw1])
+            match2 = compare_values(inv_values[inv_kw2], fac_values[fac_kw2])
+
+            if match1 and match2:
                 st.success("✅ Values match! Merged PDF is ready.")
-                merged_pdf = merge_pdfs(invoice_bytes, facture_bytes)
-                st.download_button("Download Merged PDF", data=merged_pdf, file_name="merged.pdf", mime="application/pdf")
+                merged = merge_pdfs(inv_bytes, fac_bytes)
+                st.download_button("Download Merged PDF", data=merged, file_name="merged.pdf", mime="application/pdf")
             else:
                 st.error("❌ Values do NOT match!")
-                st.write(f"**{inv_kw1} ↔ {fac_kw1}:** {result1}")
-                st.write(f"**{inv_kw2} ↔ {fac_kw2}:** {result2}")
+                st.markdown(f"**{inv_kw1} ↔ {fac_kw1}:** {'MATCH' if match1 else 'DIFF'}")
+                st.markdown(f"**{inv_kw2} ↔ {fac_kw2}:** {'MATCH' if match2 else 'DIFF'}")
 
 elif page == "Bulk Comparison":
     st.subheader("📦 Bulk PDF Comparison")
@@ -175,7 +181,7 @@ elif page == "Bulk Comparison":
     inv_kw1 = st.text_input("Invoice Keyword 1", "Sub Total")
     inv_kw2 = st.text_input("Invoice Keyword 2", "VAT")
     fac_kw1 = st.text_input("Facture Keyword 1", "Harga Jual / Penggantian / Uang Muka / Termin")
-    fac_kw2 = st.text_input("Facture Keyword 2", "Jumlah PPN")
+    fac_kw2 = st.text_input("Facture Keyword 2", "Jumlah PPN (Pajak Pertambahan Nilai)")
 
     if st.button("Start Bulk Comparison"):
         if not (invoices and factures):
@@ -191,19 +197,27 @@ elif page == "Bulk Comparison":
                         inv_bytes = invoice.read()
                         fac_bytes = facture_dict[invoice.name].read()
 
-                        inv_vals = extract_pdf_values(inv_bytes, [inv_kw1, inv_kw2])
-                        fac_vals = extract_pdf_values(fac_bytes, [fac_kw1, fac_kw2])
+                        inv_text = extract_text_from_pdf(inv_bytes)
+                        fac_text = extract_text_from_pdf(fac_bytes)
 
-                        res1 = compare_with_tolerance(inv_vals[inv_kw1], fac_vals[fac_kw1])
-                        res2 = compare_with_tolerance(inv_vals[inv_kw2], fac_vals[fac_kw2])
+                        inv_values = {
+                            inv_kw1: extract_value(inv_text, inv_kw1),
+                            inv_kw2: extract_value(inv_text, inv_kw2),
+                        }
+                        fac_values = {
+                            fac_kw1: extract_value(fac_text, fac_kw1),
+                            fac_kw2: extract_value(fac_text, fac_kw2),
+                        }
 
-                        if res1.startswith("MATCH") and res2.startswith("MATCH"):
+                        if (
+                            compare_values(inv_values[inv_kw1], fac_values[fac_kw1])
+                            and compare_values(inv_values[inv_kw2], fac_values[fac_kw2])
+                        ):
                             merged = merge_pdfs(inv_bytes, fac_bytes)
                             zf.writestr(invoice.name, merged.read())
                             successful.append(invoice.name)
                         else:
                             failed.append(invoice.name)
-
             zip_buffer.seek(0)
             st.success(f"✅ Success: {len(successful)}, ❌ Failed: {len(failed)}")
             if successful:
@@ -214,10 +228,10 @@ elif page == "Bulk Comparison":
 elif page == "Help":
     st.subheader("📖 Help")
     st.markdown("""
-    ### **How to Use FusionPDF**
-    - Upload Invoice and Facture PDFs (single or bulk).
-    - Keywords can be adjusted for different document layouts.
-    - The app first tries direct text extraction; if that fails, OCR is used.
-    - Small format differences (dots, commas) are automatically normalized.
-    - A tolerance of ±2 in numeric comparison prevents false mismatches.
+    ### How to Use FusionPDF
+    - **Single Comparison:** Upload one Invoice and one Facture PDF → Enter keywords → Compare → Download merged PDF.
+    - **Bulk Comparison:** Upload multiple PDFs (filenames must match).
+    - **Preview:** You can preview the first page of uploaded PDFs side by side.
+    - **OCR Powered:** Automatically switches to OCR if text extraction fails.
+    - **Tolerance:** Allows small numeric differences (rounding, commas, OCR noise).
     """)
