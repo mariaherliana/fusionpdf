@@ -3,3 +3,4 @@ PyPDF2
 pdf2image
 pytesseract
 Pillow
+PyMuPDF>=1.24.0
