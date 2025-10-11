@@ -77,45 +77,56 @@ def find_rightmost_number_on_line(line: str):
         return None
     return tokens[-1]
 
-def extract_value_from_pdf(pdf_file: str, keyword: str) -> float:
-    logging.info(f"Extracting value from {pdf_file} with keyword '{keyword}'")
-    if not os.path.exists(pdf_file) or not pdf_file.lower().endswith('.pdf'):
-        return -1
-
+def extract_value_from_pdf_text(pdf_bytes: bytes, keyword: str) -> float:
+    """
+    Extract a monetary value from a PDF by searching for a keyword near the number.
+    Uses PyMuPDF text extraction, context-based filtering, and robust number parsing.
+    """
     try:
-        with open(pdf_file, "rb") as f:
-            reader = PyPDF2.PdfReader(f)
-            text = "".join(page.extract_text() for page in reader.pages)
-
-        # Extract the paragraph/line that contains the keyword
-        lines = text.splitlines()
-        matching_lines = [line for line in lines if keyword.lower() in line.lower()]
-        if not matching_lines:
-            return -1
-
-        for line in matching_lines:
-            # Find all numbers in that line
-            candidates = re.findall(r"(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})?|\d+)", line)
-            numbers = []
-            for c in candidates:
-                try:
-                    num = float(c.replace(".", "").replace(",", "."))
-                    numbers.append(num)
-                except:
-                    pass
-            # Filter out small values (e.g. percentages, penalties)
-            numbers = [n for n in numbers if n > 1000]
-            if numbers:
-                # Pick the *largest* number near that keyword (most likely the amount)
-                return max(numbers)
-
-        # fallback: last resort regex on the whole text
-        all_numbers = re.findall(r"(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})?|\d+)", text)
-        return max([float(n.replace(".", "").replace(",", ".")) for n in all_numbers if float(n.replace(".", "").replace(",", ".")) > 1000], default=-1)
-
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        all_text = "\n".join(page.get_text("text") for page in doc)
     except Exception as e:
-        logging.error(f"Error extracting value: {e}")
-        return -1
+        st.error(f"❌ PDF read error ({keyword}): {e}")
+        return None
+
+    # Split into lines for proximity-based search
+    lines = all_text.splitlines()
+    matches = [line for line in lines if re.search(re.escape(keyword), line, re.IGNORECASE)]
+
+    if not matches:
+        # fallback: search in the whole text by proximity (keyword ± 100 chars)
+        m = re.search(rf"{re.escape(keyword)}(.{{0,100}})", all_text, re.IGNORECASE)
+        if not m:
+            return None
+        segment = m.group(0)
+        candidates = re.findall(r"\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})?|\d+", segment)
+    else:
+        # gather number candidates from nearby lines (keyword ±2 lines)
+        idxs = [i for i, line in enumerate(lines) if line in matches]
+        nearby_lines = []
+        for i in idxs:
+            for j in range(max(0, i-2), min(len(lines), i+3)):
+                nearby_lines.append(lines[j])
+        nearby_text = "\n".join(set(nearby_lines))
+        candidates = re.findall(r"\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})?|\d+", nearby_text)
+
+    # Clean and normalize candidate numbers
+    normalized = []
+    for c in candidates:
+        n = normalize_number_token(c)
+        if n and n > 1000:  # filter out small context numbers like "2" or "23"
+            normalized.append(n)
+
+    if not normalized:
+        return None
+
+    # Prefer the largest value near the keyword (usually total amounts)
+    value = max(normalized)
+
+    # Additional safeguard: check if suspiciously large (e.g. > 1e9)
+    if value > 1e9:
+        st.warning(f"⚠️ Suspiciously large value ({value}) found for {keyword}. Might be misparsed.")
+    return value
 
 def compare_values_with_tolerance(a, b, rel_tol=0.005, abs_tol=1.0):
     """Return dict with match boolean and reason."""
