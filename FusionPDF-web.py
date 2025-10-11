@@ -77,44 +77,45 @@ def find_rightmost_number_on_line(line: str):
         return None
     return tokens[-1]
 
-def extract_value_from_pdf_text(pdf_bytes: bytes, keyword: str, max_pages_to_check=5):
-    """
-    Extract numeric amount near keyword using PyMuPDF text.
-    Strategy:
-    - Iterate pages (top-down) up to max_pages_to_check
-    - Find line(s) containing keyword
-    - On the same line, pick the rightmost numeric token (most likely the amount)
-    - If none, check the next line(s) (1 line fallback)
-    - Return normalized float or None
-    """
-    pages = pdf_text_pages(pdf_bytes)
-    # limit pages to inspect
-    pages = pages[:max_pages_to_check]
-    for page_text in pages:
-        lines, idxs = find_label_line_indices(page_text, keyword)
-        for idx in idxs:
-            # Try same line
-            line = lines[idx]
-            token = find_rightmost_number_on_line(line)
-            if token:
-                val = normalize_number_token(token)
-                if val is not None and val > 0:
-                    return val
-            # fallback: next line (commonly the amount is below the label)
-            if idx + 1 < len(lines):
-                token = find_rightmost_number_on_line(lines[idx + 1])
-                if token:
-                    val = normalize_number_token(token)
-                    if val is not None and val > 0:
-                        return val
-            # fallback 2: previous line (sometimes the label is below and number above)
-            if idx - 1 >= 0:
-                token = find_rightmost_number_on_line(lines[idx - 1])
-                if token:
-                    val = normalize_number_token(token)
-                    if val is not None and val > 0:
-                        return val
-    return None
+def extract_value_from_pdf(pdf_file: str, keyword: str) -> float:
+    logging.info(f"Extracting value from {pdf_file} with keyword '{keyword}'")
+    if not os.path.exists(pdf_file) or not pdf_file.lower().endswith('.pdf'):
+        return -1
+
+    try:
+        with open(pdf_file, "rb") as f:
+            reader = PyPDF2.PdfReader(f)
+            text = "".join(page.extract_text() for page in reader.pages)
+
+        # Extract the paragraph/line that contains the keyword
+        lines = text.splitlines()
+        matching_lines = [line for line in lines if keyword.lower() in line.lower()]
+        if not matching_lines:
+            return -1
+
+        for line in matching_lines:
+            # Find all numbers in that line
+            candidates = re.findall(r"(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})?|\d+)", line)
+            numbers = []
+            for c in candidates:
+                try:
+                    num = float(c.replace(".", "").replace(",", "."))
+                    numbers.append(num)
+                except:
+                    pass
+            # Filter out small values (e.g. percentages, penalties)
+            numbers = [n for n in numbers if n > 1000]
+            if numbers:
+                # Pick the *largest* number near that keyword (most likely the amount)
+                return max(numbers)
+
+        # fallback: last resort regex on the whole text
+        all_numbers = re.findall(r"(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})?|\d+)", text)
+        return max([float(n.replace(".", "").replace(",", ".")) for n in all_numbers if float(n.replace(".", "").replace(",", ".")) > 1000], default=-1)
+
+    except Exception as e:
+        logging.error(f"Error extracting value: {e}")
+        return -1
 
 def compare_values_with_tolerance(a, b, rel_tol=0.005, abs_tol=1.0):
     """Return dict with match boolean and reason."""
