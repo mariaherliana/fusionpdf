@@ -165,28 +165,53 @@ if mode.startswith("Single"):
                 iframe = f'<iframe src="data:application/pdf;base64,{b64}" width="100%" height="600px"></iframe>'
                 components.html(iframe, height=600)
 
+    # Compare button
     if st.button("Compare uploaded Invoice and Facture"):
         if not (uploaded_invoice and uploaded_facture):
             st.warning("Please upload both Invoice and Facture PDFs.")
         else:
             with st.spinner("Extracting numbers and comparing..."):
-                match, info = compare_pdf_values_bytes(inv_bytes, fac_bytes, invoice_kw1, invoice_kw2, facture_kw1, facture_kw2)
+                match, info = compare_pdf_values_bytes(
+                    inv_bytes, fac_bytes,
+                    invoice_kw1, invoice_kw2,
+                    facture_kw1, facture_kw2
+                )
             st.markdown("### Extraction")
             st.json(info)
+    
+            # Success case
             if match:
                 st.success("Values match (strict equality).")
                 merged = merge_pdfs_bytes(inv_bytes, fac_bytes)
-                st.download_button("Download merged PDF", data=merged,
-                                   file_name=f"merged_{os.path.splitext(uploaded_invoice.name)[0]}_{os.path.splitext(uploaded_facture.name)[0]}.pdf",
-                                   mime="application/pdf")
+                st.download_button(
+                    "Download merged PDF",
+                    data=merged,
+                    file_name=f"merged_{os.path.splitext(uploaded_invoice.name)[0]}_{os.path.splitext(uploaded_facture.name)[0]}.pdf",
+                    mime="application/pdf",
+                )
+    
+            # Mismatch case
             else:
                 st.error("Values do NOT match (strict equality).")
                 st.caption("You can force-merge if you want:")
+    
+                # Initialize session state if not present
+                if "forced_merge" not in st.session_state:
+                    st.session_state.forced_merge = None
+    
+                # Perform forced merge on click
                 if st.button("Force merge and download anyway"):
-                    merged = merge_pdfs_bytes(inv_bytes, fac_bytes)
-                    st.download_button("Download merged PDF (forced)", data=merged,
-                                       file_name=f"merged_forced_{os.path.splitext(uploaded_invoice.name)[0]}_{os.path.splitext(uploaded_facture.name)[0]}.pdf",
-                                       mime="application/pdf")
+                    st.session_state.forced_merge = merge_pdfs_bytes(inv_bytes, fac_bytes)
+                    st.success("Force-merged successfully! Download below:")
+    
+                # Show download button if merged PDF exists
+                if st.session_state.forced_merge:
+                    st.download_button(
+                        "⬇️ Download merged PDF (forced)",
+                        data=st.session_state.forced_merge,
+                        file_name=f"merged_forced_{os.path.splitext(uploaded_invoice.name)[0]}_{os.path.splitext(uploaded_facture.name)[0]}.pdf",
+                        mime="application/pdf",
+                    )
 
 else:
     # Bulk
