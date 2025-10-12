@@ -59,13 +59,27 @@ def extract_value_from_text(text: str, keyword: str) -> float:
     m = re.search(pattern, text, re.IGNORECASE)
     if not m:
         return -1.0
-    raw = m.group(1)
-    normalized = raw.replace(".", "").replace(",", ".")
+    raw = m.group(1).strip()
+
+    # Handle both formats like "165.000" or "1.650.000"
+    # 1. Remove currency symbols, spaces, colons
+    cleaned = re.sub(r"[^\d.,]", "", raw)
+    
+    # 2. Decide what separator means decimal vs thousand
+    if "," in cleaned and "." in cleaned:
+        # e.g., 1.650,00 -> European format
+        normalized = cleaned.replace(".", "").replace(",", ".")
+    elif "." in cleaned and cleaned.count(".") > 1:
+        # e.g., 1.650.000 -> thousand separators
+        normalized = cleaned.replace(".", "")
+    else:
+        normalized = cleaned.replace(",", ".")
+    
     try:
         val = float(normalized)
-        # If the number seems too small (likely missing a zero)
-        if val < 100000 and raw.count(".") == 1 and "," not in raw:
-            val *= 10
+        # Guard against values that look under-scaled vs their peers
+        if val < 1000 and len(cleaned) > 4:
+            val *= 1000
         return val
     except Exception:
         return -1.0
