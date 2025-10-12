@@ -60,12 +60,12 @@ def extract_value_from_text(text: str, keyword: str) -> float:
     if not m:
         return -1.0
     raw = m.group(1)
+    cleaned = raw.replace(".", "").replace(",", "").strip()
     try:
-        # remove thousands dots and convert comma decimal to dot
-        normalized = raw.replace(".", "").replace(",", ".")
-        return float(normalized)
-    except Exception:
-        return -1.0
+        val = int(cleaned)
+    except ValueError:
+        val = float(re.sub(r"[^\d.,]", "", raw).replace(",", "."))
+    return val
 
 
 def extract_value_from_pdf_bytes(pdf_bytes: bytes, keyword: str) -> float:
