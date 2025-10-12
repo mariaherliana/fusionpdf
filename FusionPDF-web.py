@@ -60,12 +60,15 @@ def extract_value_from_text(text: str, keyword: str) -> float:
     if not m:
         return -1.0
     raw = m.group(1)
-    cleaned = raw.replace(".", "").replace(",", "").strip()
+    normalized = raw.replace(".", "").replace(",", ".")
     try:
-        val = int(cleaned)
-    except ValueError:
-        val = float(re.sub(r"[^\d.,]", "", raw).replace(",", "."))
-    return val
+        val = float(normalized)
+        # If the number seems too small (likely missing a zero)
+        if val < 100000 and raw.count(".") == 1 and "," not in raw:
+            val *= 10
+        return val
+    except Exception:
+        return -1.0
 
 
 def extract_value_from_pdf_bytes(pdf_bytes: bytes, keyword: str) -> float:
