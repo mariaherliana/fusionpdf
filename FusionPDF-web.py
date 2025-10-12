@@ -7,6 +7,7 @@ import zipfile
 from typing import Tuple, Dict, List
 import PyPDF2
 import logging
+import pdfplumber
 
 logging.basicConfig(level=logging.INFO)
 
@@ -21,21 +22,14 @@ st.set_page_config(page_title="FusionPDF (Streamlit)", layout="wide")
 
 # --- Core logic (kept functionally equivalent to your original code) ---
 def extract_value_from_pdf_bytes(pdf_bytes: bytes, keyword: str) -> float:
-    """
-    Extract numeric value following the literal keyword using the same regex
-    pattern your original script used:
-      rf"{re.escape(keyword)}\s*(\d+(?:[.,]\d{3})*(?:[.,]\d{2}))"
-    Returns float value or -1 if not found / error.
-    """
     try:
-        reader = PyPDF2.PdfReader(BytesIO(pdf_bytes))
-        text = "".join((page.extract_text() or "") for page in reader.pages)
+        with pdfplumber.open(BytesIO(pdf_bytes)) as pdf:
+            text = "\n".join(page.extract_text() or "" for page in pdf.pages)
 
-        pattern = rf"{re.escape(keyword)}\s*(\d+(?:[.,]\d{3})*(?:[.,]\d{2}))"
+        pattern = rf"{re.escape(keyword)}[^\d]*(\d+(?:[.,]\d{3})*(?:[.,]\d{2}))"
         match = re.search(pattern, text, re.IGNORECASE)
         if match:
             raw = match.group(1)
-            # match original behaviour: remove thousands dots, swap comma -> dot
             val = float(raw.replace(".", "").replace(",", "."))
             return val
     except Exception as e:
