@@ -1,281 +1,241 @@
-# FusionPDF-Web.py (PyMuPDF version, robust extraction & comparison)
+# app.py
 import streamlit as st
-import fitz  # PyMuPDF
+from io import BytesIO
 import re
-import io
+import os
 import zipfile
+from typing import Tuple, Dict, List
 import PyPDF2
-from pdf2image import convert_from_bytes
+import logging
 
-st.set_page_config(page_title="FusionPDF", page_icon="📄", layout="wide")
-st.title("📄 FusionPDF by Anna — PyMuPDF extraction")
-st.markdown("Text-based extraction (no OCR). Shows debug output to help tune keywords.")
+logging.basicConfig(level=logging.INFO)
 
-# ----------------- Utilities -----------------
-def normalize_number_token(token: str):
-    """Convert a numeric token with ., and , in various formats to float, or None."""
-    if not token:
-        return None
-    s = token.strip()
-    # Keep only digits, dots, commas, minus
-    s = re.sub(r'[^\d\.,\-]', '', s)
-    if s == "":
-        return None
-    # If both separators exist, decide decimal by rightmost
-    if '.' in s and ',' in s:
-        if s.rfind(',') > s.rfind('.'):
-            # comma decimal, dot thousands
-            s = s.replace('.', '')
-            s = s.replace(',', '.')
-        else:
-            # dot decimal, comma thousands
-            s = s.replace(',', '')
-    else:
-        # only dots
-        if s.count('.') > 1:
-            # likely thousand separators
-            s = s.replace('.', '')
-        elif s.count('.') == 1:
-            # ambiguous; leave as is (dot is decimal)
-            pass
-        # only commas
-        if s.count(',') > 1:
-            s = s.replace(',', '')
-        elif s.count(',') == 1:
-            # if comma is thousand sep (three digits) -> remove, else treat as decimal
-            if re.search(r',\d{3}$', s):
-                s = s.replace(',', '')
-            else:
-                s = s.replace(',', '.')
-    s = re.sub(r'[^\d\.\-]', '', s)
-    try:
-        return float(s)
-    except Exception:
-        return None
+# Default keywords copied from your original GUI defaults
+DEFAULT_INVOICE_KW1 = "Sub Total"
+DEFAULT_INVOICE_KW2 = "VAT"
+DEFAULT_FACTURE_KW1 = "Harga Jual / Penggantian / Uang Muka / Termin"
+DEFAULT_FACTURE_KW2 = "Jumlah PPN (Pajak Pertambahan Nilai)"
 
-def pdf_text_pages(pdf_bytes: bytes):
-    """Return list of page text strings using PyMuPDF."""
-    try:
-        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-        pages = [page.get_text("text") for page in doc]
-        return pages
-    except Exception as e:
-        st.error(f"PyMuPDF extraction error: {e}")
-        return []
+st.set_page_config(page_title="FusionPDF (Streamlit)", layout="wide")
 
-def find_label_line_indices(page_text: str, label: str):
-    """Return indices of lines where label appears (case-insensitive)."""
-    lines = page_text.splitlines()
-    idxs = [i for i, ln in enumerate(lines) if re.search(re.escape(label), ln, re.IGNORECASE)]
-    return lines, idxs
 
-def find_rightmost_number_on_line(line: str):
-    """Return rightmost numeric-like token on the line, more likely to be an amount."""
-    # numeric tokens that look like money: 1.234.567, 1234.56, 1,234, etc.
-    tokens = re.findall(r'(\d{1,3}(?:[.,]\d{3})+(?:[.,]\d{2})?|\d+[.,]\d{2}|\d+)', line)
-    if not tokens:
-        return None
-    return tokens[-1]
-
-def extract_value_from_pdf_text(pdf_bytes: bytes, keyword: str) -> float:
+# --- Core logic (kept functionally equivalent to your original code) ---
+def extract_value_from_pdf_bytes(pdf_bytes: bytes, keyword: str) -> float:
     """
-    Extract a monetary value from a PDF by searching for a keyword near the number.
-    Uses PyMuPDF text extraction, context-based filtering, and robust number parsing.
+    Extract numeric value following the literal keyword using the same regex
+    pattern your original script used:
+      rf"{re.escape(keyword)}\s*(\d+(?:[.,]\d{3})*(?:[.,]\d{2}))"
+    Returns float value or -1 if not found / error.
     """
     try:
-        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-        all_text = "\n".join(page.get_text("text") for page in doc)
+        reader = PyPDF2.PdfReader(BytesIO(pdf_bytes))
+        text = "".join((page.extract_text() or "") for page in reader.pages)
+
+        pattern = rf"{re.escape(keyword)}\s*(\d+(?:[.,]\d{3})*(?:[.,]\d{2}))"
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            raw = match.group(1)
+            # match original behaviour: remove thousands dots, swap comma -> dot
+            val = float(raw.replace(".", "").replace(",", "."))
+            return val
     except Exception as e:
-        st.error(f"❌ PDF read error ({keyword}): {e}")
-        return None
+        logging.error(f"extract_value_from_pdf_bytes error: {e}")
+    return -1.0
 
-    # Split into lines for proximity-based search
-    lines = all_text.splitlines()
-    matches = [line for line in lines if re.search(re.escape(keyword), line, re.IGNORECASE)]
 
-    if not matches:
-        # fallback: search in the whole text by proximity (keyword ± 100 chars)
-        m = re.search(rf"{re.escape(keyword)}(.{{0,100}})", all_text, re.IGNORECASE)
-        if not m:
-            return None
-        segment = m.group(0)
-        candidates = re.findall(r"\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})?|\d+", segment)
-    else:
-        # gather number candidates from nearby lines (keyword ±2 lines)
-        idxs = [i for i, line in enumerate(lines) if line in matches]
-        nearby_lines = []
-        for i in idxs:
-            for j in range(max(0, i-2), min(len(lines), i+3)):
-                nearby_lines.append(lines[j])
-        nearby_text = "\n".join(set(nearby_lines))
-        candidates = re.findall(r"\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})?|\d+", nearby_text)
+def compare_pdf_values_bytes(invoice_bytes: bytes, facture_bytes: bytes,
+                             invoice_kw1: str, invoice_kw2: str,
+                             facture_kw1: str, facture_kw2: str) -> Tuple[bool, Dict]:
+    """
+    Runs extraction for the two keywords on both PDFs and compares them
+    using strict equality (exact behavior of your original script).
+    Returns (match_bool, info_dict)
+    """
+    inv1 = extract_value_from_pdf_bytes(invoice_bytes, invoice_kw1)
+    inv2 = extract_value_from_pdf_bytes(invoice_bytes, invoice_kw2)
+    fac1 = extract_value_from_pdf_bytes(facture_bytes, facture_kw1)
+    fac2 = extract_value_from_pdf_bytes(facture_bytes, facture_kw2)
 
-    # Clean and normalize candidate numbers
-    normalized = []
-    for c in candidates:
-        n = normalize_number_token(c)
-        if n and n > 1000:  # filter out small context numbers like "2" or "23"
-            normalized.append(n)
+    match = (inv1 == fac1 and inv2 == fac2)
+    info = {
+        "invoice": {invoice_kw1: inv1, invoice_kw2: inv2},
+        "facture": {facture_kw1: fac1, facture_kw2: fac2},
+    }
+    return match, info
 
-    if not normalized:
-        return None
 
-    # Prefer the largest value near the keyword (usually total amounts)
-    value = max(normalized)
-
-    # Additional safeguard: check if suspiciously large (e.g. > 1e9)
-    if value > 1e9:
-        st.warning(f"⚠️ Suspiciously large value ({value}) found for {keyword}. Might be misparsed.")
-    return value
-
-def compare_values_with_tolerance(a, b, rel_tol=0.005, abs_tol=1.0):
-    """Return dict with match boolean and reason."""
-    if a is None or b is None:
-        return {"match": False, "reason": "MISSING", "a": a, "b": b}
-    if abs(a - b) <= abs_tol:
-        return {"match": True, "reason": f"ABS within {abs_tol}", "a": a, "b": b}
-    denom = max(abs(b), 1.0)
-    if abs(a - b) / denom <= rel_tol:
-        return {"match": True, "reason": f"REL within {rel_tol*100:.2f}%", "a": a, "b": b}
-    return {"match": False, "reason": f"DIFF {a - b:+.2f}", "a": a, "b": b}
-
-def merge_pdfs_bytes(pdf1_bytes: bytes, pdf2_bytes: bytes):
+def merge_pdfs_bytes(pdf1_bytes: bytes, pdf2_bytes: bytes) -> bytes:
+    """
+    Sequentially append pages from pdf1 then pdf2 (same as original merge_pdfs).
+    Returns merged PDF bytes.
+    """
     writer = PyPDF2.PdfWriter()
-    for b in (pdf1_bytes, pdf2_bytes):
-        reader = PyPDF2.PdfReader(io.BytesIO(b))
-        for p in reader.pages:
+    try:
+        r1 = PyPDF2.PdfReader(BytesIO(pdf1_bytes))
+        r2 = PyPDF2.PdfReader(BytesIO(pdf2_bytes))
+        for p in r1.pages:
             writer.add_page(p)
-    out = io.BytesIO()
-    writer.write(out)
-    out.seek(0)
-    return out
+        for p in r2.pages:
+            writer.add_page(p)
+        out = BytesIO()
+        writer.write(out)
+        return out.getvalue()
+    except Exception as e:
+        logging.error(f"merge_pdfs_bytes error: {e}")
+        raise
 
-def preview_first_page(invoice_bytes: bytes, facture_bytes: bytes):
+
+# --- UI / Flow ---
+
+st.title("FusionPDF — Invoice vs Facture (Streamlit)")
+st.markdown(
+    "Upload two PDFs for a single comparison (side-by-side preview) or upload many PDFs for bulk comparison. "
+    "Bulk pairs are matched by **filename basename** (exact match)."
+)
+
+# Sidebar for keywords (kept default values from original)
+st.sidebar.header("Keywords (use exact text as in PDFs)")
+invoice_kw1 = st.sidebar.text_input("Invoice Keyword 1", value=DEFAULT_INVOICE_KW1)
+invoice_kw2 = st.sidebar.text_input("Invoice Keyword 2", value=DEFAULT_INVOICE_KW2)
+facture_kw1 = st.sidebar.text_input("Facture Keyword 1", value=DEFAULT_FACTURE_KW1)
+facture_kw2 = st.sidebar.text_input("Facture Keyword 2", value=DEFAULT_FACTURE_KW2)
+
+uploaded_files = st.file_uploader("Upload PDF(s) — single pair (2 files) or multiple for bulk", type=["pdf"], accept_multiple_files=True)
+
+if not uploaded_files:
+    st.info("Upload one pair (2 PDFs) for single comparison (preview available), or upload many for bulk mode.")
+    st.stop()
+
+# Convert Streamlit UploadedFile objects to (filename, bytes)
+files = [(f.name, f.read()) for f in uploaded_files]
+
+if len(files) == 2:
+    # Single comparison with PDF preview
+    st.subheader("Single comparison (preview)")
     col1, col2 = st.columns(2)
-    if invoice_bytes:
-        pages = convert_from_bytes(invoice_bytes, dpi=100)
-        buf = io.BytesIO()
-        pages[0].save(buf, format="PNG")
-        col1.image(buf, caption="Invoice (first page)", use_column_width=True)
-    if facture_bytes:
-        pages = convert_from_bytes(facture_bytes, dpi=100)
-        buf = io.BytesIO()
-        pages[0].save(buf, format="PNG")
-        col2.image(buf, caption="Facture (first page)", use_column_width=True)
+    fname1, b1 = files[0]
+    fname2, b2 = files[1]
 
-# ----------------- Streamlit UI -----------------
-page = st.sidebar.radio("Navigation", ["Home", "Single Comparison", "Bulk Comparison", "Help"])
+    with col1:
+        st.markdown(f"**Left: {fname1}**")
+        # embed PDF in iframe using base64
+        pdf_b64 = b1.encode("base64") if False else None  # placeholder (we'll use other method below)
 
-if page == "Home":
-    st.subheader("Welcome — use the sidebar to choose an action.")
-    st.write("This app extracts values using PyMuPDF. If PDFs are scans, consider OCR fallback.")
+        # Using HTML iframe with base64 data
+        import base64
+        b64 = base64.b64encode(b1).decode("utf-8")
+        iframe = f'<iframe src="data:application/pdf;base64,{b64}" width="100%" height="600px"></iframe>'
+        st.components.v1.html(iframe, height=600)
 
-elif page == "Single Comparison":
-    st.subheader("Single Comparison")
-    inv_file = st.file_uploader("Upload Invoice PDF", type="pdf")
-    fac_file = st.file_uploader("Upload Facture PDF", type="pdf")
-    c1, c2 = st.columns(2)
-    with c1:
-        inv_kw1 = st.text_input("Invoice Keyword 1", "Sub Total")
-        inv_kw2 = st.text_input("Invoice Keyword 2", "VAT")
-    with c2:
-        fac_kw1 = st.text_input("Facture Keyword 1", "Harga Jual / Penggantian / Uang Muka / Termin")
-        fac_kw2 = st.text_input("Facture Keyword 2", "Jumlah PPN (Pajak Pertambahan Nilai)")
-    show_raw = st.checkbox("Show extracted raw page text (debug)", value=False)
+    with col2:
+        st.markdown(f"**Right: {fname2}**")
+        import base64
+        b64 = base64.b64encode(b2).decode("utf-8")
+        iframe = f'<iframe src="data:application/pdf;base64,{b64}" width="100%" height="600px"></iframe>'
+        st.components.v1.html(iframe, height=600)
 
-    if inv_file and fac_file:
-        inv_bytes = inv_file.read()
-        fac_bytes = fac_file.read()
-        st.subheader("Preview")
-        preview_first_page(inv_bytes, fac_bytes)
+    if st.button("Compare these two PDFs"):
+        with st.spinner("Extracting and comparing..."):
+            match, info = compare_pdf_values_bytes(b1, b2, invoice_kw1, invoice_kw2, facture_kw1, facture_kw2)
 
-        if show_raw:
-            st.write("---- Invoice raw page text (page 1) ----")
-            pages = pdf_text_pages(inv_bytes)
-            if pages:
-                st.text_area("Invoice page 1 text", pages[0][:20000], height=240)
-            st.write("---- Facture raw page text (page 1) ----")
-            pages = pdf_text_pages(fac_bytes)
-            if pages:
-                st.text_area("Facture page 1 text", pages[0][:20000], height=240)
-
-        if st.button("Start Comparison"):
-            inv_v1 = extract_value_from_pdf_text(inv_bytes, inv_kw1)
-            inv_v2 = extract_value_from_pdf_text(inv_bytes, inv_kw2)
-            fac_v1 = extract_value_from_pdf_text(fac_bytes, fac_kw1)
-            fac_v2 = extract_value_from_pdf_text(fac_bytes, fac_kw2)
-
-            st.subheader("Extracted Values")
-            colA, colB = st.columns(2)
-            with colA:
-                st.write("Invoice")
-                st.json({inv_kw1: inv_v1, inv_kw2: inv_v2})
-            with colB:
-                st.write("Facture")
-                st.json({fac_kw1: fac_v1, fac_kw2: fac_v2})
-
-            cmp1 = compare_values_with_tolerance(inv_v1, fac_v1)
-            cmp2 = compare_values_with_tolerance(inv_v2, fac_v2)
-
-            ok = cmp1["match"] and cmp2["match"]
-            if ok:
-                st.success("✅ Values match (within tolerance). You can download merged PDF.")
-                merged = merge_pdfs_bytes(inv_bytes, fac_bytes)
-                st.download_button("Download merged PDF", merged, file_name="merged.pdf", mime="application/pdf")
-            else:
-                st.error("❌ Values do NOT match.")
-                st.markdown(f"**{inv_kw1} ↔ {fac_kw1}:** {cmp1['reason']}")
-                st.markdown(f"**{inv_kw2} ↔ {fac_kw2}:** {cmp2['reason']}")
-
-elif page == "Bulk Comparison":
-    st.subheader("Bulk Comparison")
-    inv_files = st.file_uploader("Upload Invoice PDFs (multiple)", type="pdf", accept_multiple_files=True)
-    fac_files = st.file_uploader("Upload Facture PDFs (multiple)", type="pdf", accept_multiple_files=True)
-    inv_kw1 = st.text_input("Invoice Keyword 1 (bulk)", "Sub Total")
-    inv_kw2 = st.text_input("Invoice Keyword 2 (bulk)", "VAT")
-    fac_kw1 = st.text_input("Facture Keyword 1 (bulk)", "Harga Jual / Penggantian / Uang Muka / Termin")
-    fac_kw2 = st.text_input("Facture Keyword 2 (bulk)", "Jumlah PPN (Pajak Pertambahan Nilai)")
-
-    if st.button("Start Bulk Compare"):
-        if not inv_files or not fac_files:
-            st.warning("Upload both sets of PDFs.")
+        st.markdown("### Comparison Result")
+        st.json(info)
+        if match:
+            st.success("Values match (strict equality). Merging PDFs...")
+            try:
+                merged_bytes = merge_pdfs_bytes(b1, b2)
+                st.download_button("Download merged PDF", data=merged_bytes, file_name=f"merged_{os.path.splitext(fname1)[0]}_{os.path.splitext(fname2)[0]}.pdf", mime="application/pdf")
+            except Exception as e:
+                st.error(f"Failed to merge PDFs: {e}")
         else:
-            fac_map = {f.name: f for f in fac_files}
-            success, failed = [], []
-            zip_out = io.BytesIO()
-            with zipfile.ZipFile(zip_out, "w") as zf:
-                for inv in inv_files:
-                    if inv.name not in fac_map:
-                        failed.append(inv.name + " (no matching facture file)")
-                        continue
-                    inv_b = inv.read()
-                    fac_b = fac_map[inv.name].read()
-                    inv_v1 = extract_value_from_pdf_text(inv_b, inv_kw1)
-                    inv_v2 = extract_value_from_pdf_text(inv_b, inv_kw2)
-                    fac_v1 = extract_value_from_pdf_text(fac_b, fac_kw1)
-                    fac_v2 = extract_value_from_pdf_text(fac_b, fac_kw2)
-                    cmp1 = compare_values_with_tolerance(inv_v1, fac_v1)
-                    cmp2 = compare_values_with_tolerance(inv_v2, fac_v2)
-                    if cmp1["match"] and cmp2["match"]:
-                        merged = merge_pdfs_bytes(inv_b, fac_b)
-                        zf.writestr(inv.name, merged.read())
-                        success.append(inv.name)
-                    else:
-                        failed.append(inv.name)
-            zip_out.seek(0)
-            st.success(f"Done. Success: {len(success)}, Failed: {len(failed)}")
-            if success:
-                st.download_button("Download matched merged PDFs (zip)", zip_out, "merged_pdfs.zip", "application/zip")
-            if failed:
-                st.warning("Failed: " + ", ".join(failed))
+            st.error("Values do NOT match. No merged PDF will be produced by default.")
+            # Still offer merge if user insists
+            if st.button("Force merge and download anyway"):
+                try:
+                    merged_bytes = merge_pdfs_bytes(b1, b2)
+                    st.download_button("Download merged PDF (forced)", data=merged_bytes, file_name=f"merged_{os.path.splitext(fname1)[0]}_{os.path.splitext(fname2)[0]}.pdf", mime="application/pdf")
+                except Exception as e:
+                    st.error(f"Failed to merge PDFs: {e}")
 
-elif page == "Help":
-    st.subheader("Help & Tips")
-    st.markdown("""
-    - This uses PyMuPDF (fitz) for text extraction — no OCR.
-    - If PDFs are scanned images, extraction will fail; consider OCR fallback.
-    - Use the debug 'Show extracted raw page text' to inspect what text was read.
-    - If values are still mismatched, paste the 'Invoice page 1 text' and 'Facture page 1 text' and I will point to the problem token.
-    - Install PyMuPDF: `pip install PyMuPDF`
-    """)
+else:
+    # Bulk mode: match files by basename
+    st.subheader("Bulk comparison")
+    st.info("Files will be grouped by filename (basename). For each basename with two PDFs present, we'll compare and attempt to merge on success.")
 
+    # Build mapping basename -> list of (name, bytes)
+    from collections import defaultdict
+    by_base = defaultdict(list)
+    for name, b in files:
+        base = os.path.basename(name)
+        by_base[base].append((name, b))
+
+    pairs = []
+    missing = []
+    for base, arr in by_base.items():
+        if len(arr) >= 2:
+            # take first two as pair (mimics earlier logic that relied on folders)
+            pairs.append((arr[0], arr[1]))
+        else:
+            missing.append(base)
+
+    st.write(f"Found {len(pairs)} pair(s) and {len(missing)} unmatched filename(s).")
+    if missing:
+        st.warning(f"Unmatched (no pair): {', '.join(missing[:10])}{'...' if len(missing)>10 else ''}")
+
+    if st.button("Run bulk comparison"):
+        results = []
+        successful_merged = []
+        prog = st.progress(0)
+        total = len(pairs)
+        for i, ((n1, b1), (n2, b2)) in enumerate(pairs):
+            # run same compare logic
+            match, info = compare_pdf_values_bytes(b1, b2, invoice_kw1, invoice_kw2, facture_kw1, facture_kw2)
+            result = {
+                "invoice_name": n1,
+                "facture_name": n2,
+                "match": match,
+                "info": info
+            }
+            if match:
+                # merge and collect bytes for download/zip
+                try:
+                    merged = merge_pdfs_bytes(b1, b2)
+                    result["merged_bytes"] = merged
+                    successful_merged.append((f"merged_{os.path.splitext(n1)[0]}_{os.path.splitext(n2)[0]}.pdf", merged))
+                except Exception as e:
+                    result["merge_error"] = str(e)
+            results.append(result)
+            prog.progress((i + 1) / max(1, total))
+        st.success("Bulk comparison finished.")
+
+        # Show results table (brief)
+        import pandas as pd
+        rows = []
+        for r in results:
+            rows.append({
+                "invoice": r["invoice_name"],
+                "facture": r["facture_name"],
+                "match": r["match"],
+                "invoice_val_1": r["info"]["invoice"].get(invoice_kw1),
+                "invoice_val_2": r["info"]["invoice"].get(invoice_kw2),
+                "facture_val_1": r["info"]["facture"].get(facture_kw1),
+                "facture_val_2": r["info"]["facture"].get(facture_kw2),
+            })
+        df = pd.DataFrame(rows)
+        st.dataframe(df)
+
+        # Allow downloading individual merged PDFs (successful) and zip all
+        if successful_merged:
+            st.markdown("### Successful merged PDFs")
+            for fname, b in successful_merged:
+                st.download_button(f"Download {fname}", data=b, file_name=fname, mime="application/pdf")
+            # offer single zip download
+            if len(successful_merged) > 1:
+                zip_io = BytesIO()
+                with zipfile.ZipFile(zip_io, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+                    for fname, b in successful_merged:
+                        zf.writestr(fname, b)
+                zip_io.seek(0)
+                st.download_button("Download all merged PDFs (zip)", data=zip_io.getvalue(), file_name="merged_pdfs.zip", mime="application/zip")
+        else:
+            st.warning("No successful merges produced (probably no matches).")
