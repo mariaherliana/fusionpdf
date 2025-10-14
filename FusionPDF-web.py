@@ -27,6 +27,8 @@ def extract_value_from_pdf(pdf_file_path: str, keyword: str) -> float:
         # Normalize spacing and hidden characters before searching
         text = re.sub(r'[\u00A0\u202F]', ' ', text)  # replace non-breaking spaces
         text = re.sub(r'\s+', ' ', text)  # collapse weird spacing/newlines
+        if "vat" in keyword.lower():
+        st.text_area("DEBUG — invoice text around VAT", text[:2000])
 
         # smarter pattern: special case for VAT-like keywords
         if keyword.lower().strip() in ["vat", "v.a.t", "ppn"]:
