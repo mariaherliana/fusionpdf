@@ -1,6 +1,6 @@
 # streamlit_fusion_pdf_app.py
-# Streamlit adaptation of FusionPDF.py — Natural Mocha Theme Version
-# Keeps original extraction logic (no OCR). Adds "Force Merge" toggle and refined UI.
+# Streamlit adaptation of FusionPDF.py — Natural Mocha v2
+# Adds value preview card, modern UI, and force-merge control.
 
 import streamlit as st
 import tempfile
@@ -11,7 +11,7 @@ from io import BytesIO
 from pdf2image import convert_from_path
 
 # -------------------------
-# Utility functions (core logic preserved/adapted)
+# Utility functions (core logic preserved)
 # -------------------------
 
 def extract_value_from_pdf(pdf_file_path: str, keyword: str) -> float:
@@ -101,11 +101,6 @@ html, body, [class*="stApp"] {
   color: var(--coffee);
   font-family: "Inter", sans-serif;
 }
-.sidebar .stFileUploader, .sidebar .stTextInput {
-  background-color: var(--card);
-  border-radius: 10px;
-  padding: 10px;
-}
 .section-title {
   font-size: 20px;
   font-weight: 700;
@@ -139,12 +134,42 @@ html, body, [class*="stApp"] {
   color: var(--coffee);
   padding: 10px;
   border-radius: 8px;
+  margin-top: 10px;
 }
 .warning-box {
   background-color: var(--accent-rose);
   color: var(--coffee);
   padding: 10px;
   border-radius: 8px;
+  margin-top: 10px;
+}
+.value-table {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 12px;
+  background-color: #f9f3eb;
+  border-radius: 10px;
+  padding: 12px 16px;
+  box-shadow: 0 1px 4px rgba(58,47,43,0.1);
+}
+.value-column {
+  flex: 1;
+  text-align: right;
+  font-family: "Courier New", monospace;
+  font-size: 14px;
+  color: var(--coffee);
+}
+.value-header {
+  text-align: right;
+  font-weight: 600;
+  color: var(--accent);
+  font-size: 15px;
+  margin-bottom: 4px;
+}
+.value-divider {
+  width: 1px;
+  background-color: #d9cbbb;
+  margin: 0 12px;
 }
 </style>
 """
@@ -164,6 +189,7 @@ with st.sidebar:
 
 # Layout
 col1, col2 = st.columns(2)
+comparison_result = None
 
 with col1:
     st.markdown("<div class='app-card'><div class='section-title'>Upload PDFs</div>", unsafe_allow_html=True)
@@ -184,9 +210,6 @@ def save_uploaded_to_temp(uploaded_file) -> str:
 invoice_path = save_uploaded_to_temp(invoice_file) if invoice_file else ''
 facture_path = save_uploaded_to_temp(facture_file) if facture_file else ''
 
-comparison_result = None
-
-# Actions
 with col2:
     st.markdown("<div class='app-card'><div class='section-title'>Actions</div>", unsafe_allow_html=True)
     if st.button('Compare values', key='compare', use_container_width=True):
@@ -205,18 +228,39 @@ with col2:
             else:
                 st.markdown("<div class='warning-box'>Values do not match ⚠️</div>", unsafe_allow_html=True)
 
+            # --- Value display table ---
+            st.markdown("""
+            <div class='value-table'>
+                <div class='value-column'>
+                    <div class='value-header'>Invoice</div>
+                    <div>{:.2f}</div>
+                    <div>{:.2f}</div>
+                </div>
+                <div class='value-divider'></div>
+                <div class='value-column'>
+                    <div class='value-header'>Facture</div>
+                    <div>{:.2f}</div>
+                    <div>{:.2f}</div>
+                </div>
+            </div>
+            """.format(
+                comparison_result['invoice_value1'],
+                comparison_result['invoice_value2'],
+                comparison_result['facture_value1'],
+                comparison_result['facture_value2']
+            ), unsafe_allow_html=True)
+
     if st.button('Preview PDFs', key='preview', use_container_width=True):
         if invoice_path:
             try:
-                st.image(preview_pdf_first_page_as_image(invoice_path), caption='Invoice — First Page', use_column_width=True)
+                st.image(preview_pdf_first_page_as_image(invoice_path), caption='Invoice — First Page', use_container_width=True)
             except Exception as e:
                 st.error(f'Invoice preview failed: {e}')
         if facture_path:
             try:
-                st.image(preview_pdf_first_page_as_image(facture_path), caption='Facture — First Page', use_column_width=True)
+                st.image(preview_pdf_first_page_as_image(facture_path), caption='Facture — First Page', use_container_width=True)
             except Exception as e:
                 st.error(f'Facture preview failed: {e}')
-
     st.markdown('</div>', unsafe_allow_html=True)
 
 # Merge Section
