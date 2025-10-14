@@ -24,7 +24,8 @@ def extract_value_from_pdf(pdf_file_path: str, keyword: str) -> float:
             reader = PyPDF2.PdfReader(f)
             text = "".join((page.extract_text() or "") for page in reader.pages)
 
-        pattern = rf"{re.escape(keyword)}\s*(\d+(?:[.,]\d{{3}})*(?:[.,]\d{{2}}))"
+        # improved regex: case-insensitive, tolerates colons, dashes, spaces, and line breaks
+        pattern = rf"(?i){re.escape(keyword)}\s*[:\-\s]*([\d]+(?:[.,]\d{{3}})*(?:[.,]\d{{2}})?)"
         value_match = re.search(pattern, text)
         if value_match:
             raw = value_match.group(1)
