@@ -130,10 +130,10 @@ st.markdown(MOCHA_CSS, unsafe_allow_html=True)
 # Layout: sidebar for keywords; main area for uploaders and controls
 with st.sidebar:
     st.markdown("<div class='app-card'><div class='section-title'>Keywords</div>", unsafe_allow_html=True)
-    invoice_k1 = st.text_input('Invoice keyword 1', value='TOTAL')
+    invoice_k1 = st.text_input('Invoice keyword 1', value='Sub Total')
     invoice_k2 = st.text_input('Invoice keyword 2', value='VAT')
-    facture_k1 = st.text_input('Facture keyword 1', value='TOTAL')
-    facture_k2 = st.text_input('Facture keyword 2', value='VAT')
+    facture_k1 = st.text_input('Facture keyword 1', value='Harga Jual / Penggantian / Uang Muka / Termin')
+    facture_k2 = st.text_input('Facture keyword 2', value='Jumlah PPN (Pajak Pertambahan Nilai)')
     st.markdown("<hr>", unsafe_allow_html=True)
     st.markdown("<div class='small-muted'>These values are used by the extractor to find numeric values following the keyword. Leave blank to skip.</div></div>", unsafe_allow_html=True)
 
