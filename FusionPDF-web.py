@@ -41,8 +41,11 @@ def extract_value_from_pdf(pdf_file_path: str, keyword: str) -> float:
         if value_match:
             raw = value_match.group(1)
         elif keyword.lower().strip() in ["vat", "v.a.t", "ppn"]:
-            # fallback: catch "Total" followed by smaller number if VAT missing
-            alt_match = re.search(r"Total\s*([\d]+(?:[.,]\d{3})*(?:[.,]\d{2})?)", text)
+            # Fallback: look for "Stamp Duty" or "Total" followed by a smaller number
+            alt_match = re.search(
+                r"(?:Stamp\s*Duty\s*Total|Total\s*(?:Amount)?)[^\d]{0,10}([\d]+(?:[.,]\d{3})*(?:[.,]\d{2})?)",
+                text, re.IGNORECASE
+            )
             if alt_match:
                 raw = alt_match.group(1)
             else:
