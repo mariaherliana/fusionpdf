@@ -1,299 +1,243 @@
-# app.py
+# streamlit_fusion_pdf_app.py
+# Streamlit adaptation of FusionPDF.py (originally a Tkinter app)
+# Kept the core logic (keyword extraction, comparison, merging) intact
+# Adds a modern "mocha"-themed custom CSS and a sidebar for keywords.
+
 import streamlit as st
-from io import BytesIO
-import re
+import tempfile
 import os
-import zipfile
-from typing import Tuple, Dict, List
-import logging
-
-# Extraction and merging libs
-import pdfplumber
+import re
 import PyPDF2
+from io import BytesIO
+from pdf2image import convert_from_path
 
-# Optional nicer PDF viewer
-try:
-    from streamlit_pdf_viewer import pdf_viewer
-    HAVE_PDF_VIEWER = True
-except Exception:
-    HAVE_PDF_VIEWER = False
+# -------------------------
+# Utility functions (core logic preserved/adapted)
+# -------------------------
 
-logging.basicConfig(level=logging.INFO)
+def extract_value_from_pdf(pdf_file_path: str, keyword: str) -> float:
+    """Extract a numeric value from PDF based on a keyword.
+    Returns -1 on failure or if no value found. Keeps same regex logic as original.
+    """
+    if not os.path.exists(pdf_file_path) or not pdf_file_path.lower().endswith('.pdf'):
+        return -1
 
-# Defaults (from your original script)
-DEFAULT_INVOICE_KW1 = "Sub Total"
-DEFAULT_INVOICE_KW2 = "VAT"
-DEFAULT_FACTURE_KW1 = "Harga Jual / Penggantian / Uang Muka / Termin"
-DEFAULT_FACTURE_KW2 = "Jumlah PPN (Pajak Pertambahan Nilai)"
-
-st.set_page_config(page_title="FusionPDF (Streamlit)", layout="wide")
-
-# --- Extraction / Comparison / Merge (kept behaviorally equivalent) ---
-def extract_text_with_pdfplumber(pdf_bytes: bytes) -> str:
-    """Return concatenated page text using pdfplumber (visually ordered)."""
-    text_parts = []
     try:
-        with pdfplumber.open(BytesIO(pdf_bytes)) as pdf:
-            for p in pdf.pages:
-                t = p.extract_text()
-                if t:
-                    text_parts.append(t)
+        with open(pdf_file_path, 'rb') as f:
+            reader = PyPDF2.PdfReader(f)
+            text = "".join((page.extract_text() or "") for page in reader.pages)
+
+        # original regex pattern: keyword followed by a number (supporting '.' and ',' thousand/decimal)
+        pattern = rf"{re.escape(keyword)}\s*(\d+(?:[.,]\d{{3}})*(?:[.,]\d{{2}}))"
+        value_match = re.search(pattern, text)
+        if value_match:
+            raw = value_match.group(1)
+            # normalize thousand separators and decimal comma
+            value = float(raw.replace('.', '').replace(',', '.'))
+            return value
+        return -1
     except Exception as e:
-        logging.exception("pdfplumber failed to open PDF: %s", e)
-    return "\n".join(text_parts)
+        # In Streamlit we will show errors in the UI; return -1 so caller knows
+        return -1
 
 
-def extract_value_from_text(text: str, keyword: str) -> float:
+def compare_pdf_values(invoice_pdf: str, facture_pdf: str, keywords: dict) -> dict:
+    """Compare values between invoice and facture PDFs.
+    keywords: dict with keys invoice_k1, invoice_k2, facture_k1, facture_k2
+    Returns a dict with extracted values and a boolean match flag.
     """
-    Use a pattern equivalent to the original:
-      rf"{re.escape(keyword)}\s*(\d+(?:[.,]\d{3})*(?:[.,]\d{2}))"
-    Slight improvement: allow non-digit separators (like 'Rp', ':' or spaces) between keyword and number.
-    Returns -1.0 if not found.
-    """
-    if not keyword:
-        return -1.0
-    # Escape keyword (same as re.escape in original)
-    esc = re.escape(keyword)
-    # allow any non-digit characters (including currency symbols) between keyword & number
-    pattern = rf"{esc}[^\d\-]*?(\d+(?:[.,]\d{{3}})*(?:[.,]\d{{2}}))"
-    m = re.search(pattern, text, re.IGNORECASE)
-    if not m:
-        return -1.0
-    raw = m.group(1).strip()
+    invoice_value1 = extract_value_from_pdf(invoice_pdf, keywords.get('invoice_k1', ''))
+    invoice_value2 = extract_value_from_pdf(invoice_pdf, keywords.get('invoice_k2', ''))
+    facture_value1 = extract_value_from_pdf(facture_pdf, keywords.get('facture_k1', ''))
+    facture_value2 = extract_value_from_pdf(facture_pdf, keywords.get('facture_k2', ''))
 
-    # Handle both formats like "165.000" or "1.650.000"
-    # 1. Remove currency symbols, spaces, colons
-    cleaned = re.sub(r"[^\d.,]", "", raw)
-    
-    # 2. Decide what separator means decimal vs thousand
-    if "," in cleaned and "." in cleaned:
-        # e.g., 1.650,00 -> European format
-        normalized = cleaned.replace(".", "").replace(",", ".")
-    elif "." in cleaned and cleaned.count(".") > 1:
-        # e.g., 1.650.000 -> thousand separators
-        normalized = cleaned.replace(".", "")
-    else:
-        normalized = cleaned.replace(",", ".")
-    
-    try:
-        val = float(normalized)
-        # Guard against values that look under-scaled vs their peers
-        if val < 1000 and len(cleaned) > 4:
-            val *= 1000
-        return val
-    except Exception:
-        return -1.0
+    match = (invoice_value1 == facture_value1) and (invoice_value2 == facture_value2)
 
-
-def extract_value_from_pdf_bytes(pdf_bytes: bytes, keyword: str) -> float:
-    text = extract_text_with_pdfplumber(pdf_bytes)
-    return extract_value_from_text(text, keyword)
-
-
-def compare_pdf_values_bytes(invoice_bytes: bytes, facture_bytes: bytes,
-                             invoice_kw1: str, invoice_kw2: str,
-                             facture_kw1: str, facture_kw2: str) -> Tuple[bool, Dict]:
-    inv1 = extract_value_from_pdf_bytes(invoice_bytes, invoice_kw1)
-    inv2 = extract_value_from_pdf_bytes(invoice_bytes, invoice_kw2)
-    fac1 = extract_value_from_pdf_bytes(facture_bytes, facture_kw1)
-    fac2 = extract_value_from_pdf_bytes(facture_bytes, facture_kw2)
-    match = (inv1 == fac1 and inv2 == fac2)  # strict equality, as requested
-    info = {
-        "invoice": {invoice_kw1: inv1, invoice_kw2: inv2},
-        "facture": {facture_kw1: fac1, facture_kw2: fac2},
+    return {
+        'invoice_value1': invoice_value1,
+        'invoice_value2': invoice_value2,
+        'facture_value1': facture_value1,
+        'facture_value2': facture_value2,
+        'match': match,
     }
-    return match, info
 
 
-def merge_pdfs_bytes(pdf1_bytes: bytes, pdf2_bytes: bytes) -> bytes:
-    writer = PyPDF2.PdfWriter()
-    r1 = PyPDF2.PdfReader(BytesIO(pdf1_bytes))
-    r2 = PyPDF2.PdfReader(BytesIO(pdf2_bytes))
-    for p in r1.pages:
-        writer.add_page(p)
-    for p in r2.pages:
-        writer.add_page(p)
-    out = BytesIO()
-    writer.write(out)
-    return out.getvalue()
+def merge_pdfs_bytes(pdf1_path: str, pdf2_path: str) -> bytes:
+    """Merge two PDFs and return result as bytes.
+    Preserves original merge order (pdf1 then pdf2).
+    """
+    pdf_writer = PyPDF2.PdfWriter()
+    try:
+        with open(pdf1_path, 'rb') as f1, open(pdf2_path, 'rb') as f2:
+            r1 = PyPDF2.PdfReader(f1)
+            r2 = PyPDF2.PdfReader(f2)
+            for p in r1.pages:
+                pdf_writer.add_page(p)
+            for p in r2.pages:
+                pdf_writer.add_page(p)
+
+            out_io = BytesIO()
+            pdf_writer.write(out_io)
+            out_io.seek(0)
+            return out_io.read()
+    except Exception as e:
+        raise
 
 
-# --- UI ---
-st.title("FusionPDF — Invoice vs Facture")
-st.write("Single comparison (separate Invoice & Facture upload) or Bulk (many files). Keywords are editable in the sidebar.")
+def preview_pdf_first_page_as_image(pdf_path: str, dpi: int = 100) -> BytesIO:
+    """Convert first page of PDF to PNG bytes (via pdf2image). Returns BytesIO or raises."""
+    images = convert_from_path(pdf_path, dpi=dpi, first_page=1, last_page=1)
+    if not images:
+        raise RuntimeError('No images rendered from PDF')
+    img = images[0]
+    bio = BytesIO()
+    img.save(bio, format='PNG')
+    bio.seek(0)
+    return bio
 
-# Sidebar: keywords and options
-st.sidebar.header("Extraction keywords (exact text expected)")
-invoice_kw1 = st.sidebar.text_input("Invoice keyword 1", value=DEFAULT_INVOICE_KW1)
-invoice_kw2 = st.sidebar.text_input("Invoice keyword 2", value=DEFAULT_INVOICE_KW2)
-facture_kw1 = st.sidebar.text_input("Facture keyword 1", value=DEFAULT_FACTURE_KW1)
-facture_kw2 = st.sidebar.text_input("Facture keyword 2", value=DEFAULT_FACTURE_KW2)
 
-st.sidebar.markdown("---")
-st.sidebar.write("Comparison: strict equality (default) — change logic in code to allow tolerance if desired.")
+# -------------------------
+# Streamlit UI
+# -------------------------
 
-mode = st.radio("Mode", options=["Single (explicit Invoice + Facture upload)", "Bulk (multiple files)"])
+st.set_page_config(page_title='FusionPDF — Streamlit', layout='wide')
 
-if mode.startswith("Single"):
-    st.header("Single comparison (preview)")
-    col1, col2 = st.columns(2)
-    with col1:
-        st.subheader("Invoice (left)")
-        uploaded_invoice = st.file_uploader("Upload Invoice PDF", type="pdf", key="inv_single")
-        if uploaded_invoice:
-            inv_bytes = uploaded_invoice.read()
-            # preview
-            if HAVE_PDF_VIEWER:
-                pdf_viewer(inv_bytes, height=600, key="inv_view")
-            else:
-                # safe iframe fallback (serve as base64 but in small iframe; Chrome may block data:urls in some contexts)
-                import base64, streamlit.components.v1 as components
-                b64 = base64.b64encode(inv_bytes).decode("utf-8")
-                iframe = f'<iframe src="data:application/pdf;base64,{b64}" width="100%" height="600px"></iframe>'
-                components.html(iframe, height=600)
+# Custom Mocha-like CSS (rounded, soft shadows, subtle pastel accents)
+MOCHA_CSS = r"""
+<style>
+:root{
+  --bg:#111010;
+  --panel:#171617;
+  --muted:#a3a09a;
+  --accent:#c7a9ff;
+  --accent-2:#ffb5cf;
+  --card:#1f1e1b;
+}
+html,body,#root, .stApp {
+  background: linear-gradient(180deg, #0f0f10 0%, #141312 100%);
+  color: #e6e1dc;
+}
+.section-title{font-size:20px;font-weight:700;margin-bottom:8px}
+.app-card{background:var(--card);border-radius:14px;padding:18px;box-shadow: 0 6px 18px rgba(0,0,0,0.45);}
+.small-muted{color:var(--muted);font-size:13px}
+.btn-cute{background:linear-gradient(90deg,var(--accent),var(--accent-2));border:none;padding:8px 14px;border-radius:12px;color:#111;font-weight:700}
+.sidebar .stFileUploader{min-height:60px}
+</style>
+"""
 
-    with col2:
-        st.subheader("Facture (right)")
-        uploaded_facture = st.file_uploader("Upload Facture PDF", type="pdf", key="fac_single")
-        if uploaded_facture:
-            fac_bytes = uploaded_facture.read()
-            if HAVE_PDF_VIEWER:
-                pdf_viewer(fac_bytes, height=600, key="fac_view")
-            else:
-                import base64, streamlit.components.v1 as components
-                b64 = base64.b64encode(fac_bytes).decode("utf-8")
-                iframe = f'<iframe src="data:application/pdf;base64,{b64}" width="100%" height="600px"></iframe>'
-                components.html(iframe, height=600)
+st.markdown(MOCHA_CSS, unsafe_allow_html=True)
 
-    # Compare button
-    if st.button("Compare uploaded Invoice and Facture"):
-        if not (uploaded_invoice and uploaded_facture):
-            st.warning("Please upload both Invoice and Facture PDFs.")
+# Layout: sidebar for keywords; main area for uploaders and controls
+with st.sidebar:
+    st.markdown("<div class='app-card'><div class='section-title'>Keywords</div>", unsafe_allow_html=True)
+    invoice_k1 = st.text_input('Invoice keyword 1', value='TOTAL')
+    invoice_k2 = st.text_input('Invoice keyword 2', value='VAT')
+    facture_k1 = st.text_input('Facture keyword 1', value='TOTAL')
+    facture_k2 = st.text_input('Facture keyword 2', value='VAT')
+    st.markdown("<hr>", unsafe_allow_html=True)
+    st.markdown("<div class='small-muted'>These values are used by the extractor to find numeric values following the keyword. Leave blank to skip.</div></div>", unsafe_allow_html=True)
+
+# Main area
+st.markdown("<div style='display:flex;gap:20px'>", unsafe_allow_html=True)
+col1, col2 = st.columns([1,1])
+
+with col1:
+    st.markdown("<div class='app-card'><div class='section-title'>Upload PDFs</div>", unsafe_allow_html=True)
+    invoice_file = st.file_uploader('Upload Invoice PDF (drag & drop)', type=['pdf'], key='invoice_uploader')
+    facture_file = st.file_uploader('Upload Facture PDF (drag & drop)', type=['pdf'], key='facture_uploader')
+    st.markdown('</div>', unsafe_allow_html=True)
+
+with col2:
+    st.markdown("<div class='app-card'><div class='section-title'>Preview & Actions</div>", unsafe_allow_html=True)
+    col_actions = st.container()
+    st.markdown('</div>', unsafe_allow_html=True)
+
+st.markdown('</div>', unsafe_allow_html=True)
+
+# Action area below
+st.markdown("<div class='app-card' style='margin-top:18px'><div class='section-title'>Operations</div>", unsafe_allow_html=True)
+col_a, col_b, col_c = st.columns([1,1,1])
+
+keywords = {
+    'invoice_k1': invoice_k1,
+    'invoice_k2': invoice_k2,
+    'facture_k1': facture_k1,
+    'facture_k2': facture_k2,
+}
+
+# save uploaded files to temporary files for downstream processing
+def save_uploaded_to_temp(uploaded_file) -> str:
+    if uploaded_file is None:
+        return ''
+    suffix = '.pdf'
+    tf = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+    tf.write(uploaded_file.getbuffer())
+    tf.flush()
+    tf.close()
+    return tf.name
+
+invoice_path = save_uploaded_to_temp(invoice_file) if invoice_file else ''
+facture_path = save_uploaded_to_temp(facture_file) if facture_file else ''
+
+with col_a:
+    if st.button('Compare values'):
+        if not invoice_path or not facture_path:
+            st.error('Please upload both PDFs before comparing.')
         else:
-            with st.spinner("Extracting numbers and comparing..."):
-                match, info = compare_pdf_values_bytes(
-                    inv_bytes, fac_bytes,
-                    invoice_kw1, invoice_kw2,
-                    facture_kw1, facture_kw2
-                )
-            st.markdown("### Extraction")
-            st.json(info)
-    
-            # Success case
-            if match:
-                st.success("Values match (strict equality).")
-                merged = merge_pdfs_bytes(inv_bytes, fac_bytes)
-                st.download_button(
-                    "Download merged PDF",
-                    data=merged,
-                    file_name=f"merged_{os.path.splitext(uploaded_invoice.name)[0]}_{os.path.splitext(uploaded_facture.name)[0]}.pdf",
-                    mime="application/pdf",
-                )
-    
-            # Mismatch case
+            with st.spinner('Extracting and comparing...'):
+                result = compare_pdf_values(invoice_path, facture_path, keywords)
+            st.write('**Invoice values**: ', result['invoice_value1'], result['invoice_value2'])
+            st.write('**Facture values**: ', result['facture_value1'], result['facture_value2'])
+            if result['match']:
+                st.success('Values match ✅')
             else:
-                st.error("Values do NOT match (strict equality).")
-                st.caption("You can force-merge if you want:")
-    
-                # Initialize session state if not present
-                if "forced_merge" not in st.session_state:
-                    st.session_state.forced_merge = None
-    
-                # Perform forced merge on click
-                if st.button("Force merge and download anyway"):
-                    st.session_state.forced_merge = merge_pdfs_bytes(inv_bytes, fac_bytes)
-                    st.success("Force-merged successfully! Download below:")
-    
-                # Show download button if merged PDF exists
-                if st.session_state.forced_merge:
-                    st.download_button(
-                        "⬇️ Download merged PDF (forced)",
-                        data=st.session_state.forced_merge,
-                        file_name=f"merged_forced_{os.path.splitext(uploaded_invoice.name)[0]}_{os.path.splitext(uploaded_facture.name)[0]}.pdf",
-                        mime="application/pdf",
-                    )
+                st.warning('Values do NOT match ⚠️')
 
-else:
-    # Bulk
-    st.header("Bulk comparison")
-    st.write("Upload many PDFs. Files will be grouped by basename; the first two files with the same basename are taken as a pair.")
-    uploaded = st.file_uploader("Upload multiple PDFs (bulk)", type="pdf", accept_multiple_files=True, key="bulk_files")
-    if not uploaded:
-        st.info("Upload PDFs for bulk comparison.")
-        st.stop()
-
-    files = [(f.name, f.read()) for f in uploaded]
-
-    # group by basename (filename without extension)
-    from collections import defaultdict
-    grouped = defaultdict(list)
-    for name, b in files:
-        base = os.path.splitext(os.path.basename(name))[0]
-        grouped[base].append((name, b))
-
-    # Prepare pairs and unmatched
-    pairs = []
-    unmatched = []
-    for base, arr in grouped.items():
-        if len(arr) >= 2:
-            # take first two as pair
-            pairs.append((arr[0], arr[1]))
+with col_b:
+    if st.button('Merge and download'):
+        if not invoice_path or not facture_path:
+            st.error('Please upload both PDFs before merging.')
         else:
-            unmatched.append(arr[0][0])
+            try:
+                merged_bytes = merge_pdfs_bytes(invoice_path, facture_path)
+                st.success('PDFs merged — download below')
+                st.download_button('Download merged PDF', merged_bytes, file_name='merged.pdf', mime='application/pdf')
+            except Exception as e:
+                st.error(f'Failed to merge PDFs: {e}')
 
-    st.write(f"Found {len(pairs)} pair(s). Unmatched files: {len(unmatched)}")
-    if unmatched:
-        st.warning("Unmatched (no pair): " + ", ".join(unmatched[:10]) + ("..." if len(unmatched) > 10 else ""))
-
-    if st.button("Run bulk comparison"):
-        results = []
-        successful = []
-        progress = st.progress(0)
-        total = len(pairs) or 1
-        for i, ((n1, b1), (n2, b2)) in enumerate(pairs):
-            match, info = compare_pdf_values_bytes(b1, b2, invoice_kw1, invoice_kw2, facture_kw1, facture_kw2)
-            result = {
-                "invoice_name": n1,
-                "facture_name": n2,
-                "match": match,
-                "invoice_val_1": info["invoice"].get(invoice_kw1),
-                "invoice_val_2": info["invoice"].get(invoice_kw2),
-                "facture_val_1": info["facture"].get(facture_kw1),
-                "facture_val_2": info["facture"].get(facture_kw2),
-            }
-            # try merging only on match (same behavior as original)
-            if match:
+with col_c:
+    if st.button('Preview first pages'):
+        if not invoice_path and not facture_path:
+            st.error('Upload at least one PDF to preview')
+        else:
+            if invoice_path:
                 try:
-                    merged = merge_pdfs_bytes(b1, b2)
-                    successful.append((f"merged_{os.path.splitext(n1)[0]}_{os.path.splitext(n2)[0]}.pdf", merged))
-                    result["merged"] = True
+                    img_io = preview_pdf_first_page_as_image(invoice_path)
+                    st.image(img_io, caption='Invoice — first page', use_column_width=True)
                 except Exception as e:
-                    result["merged"] = False
-                    result["merge_error"] = str(e)
-            else:
-                result["merged"] = False
-            results.append(result)
-            progress.progress((i + 1) / total)
+                    st.error(f'Failed to render invoice preview: {e}')
+            if facture_path:
+                try:
+                    img_io2 = preview_pdf_first_page_as_image(facture_path)
+                    st.image(img_io2, caption='Facture — first page', use_column_width=True)
+                except Exception as e:
+                    st.error(f'Failed to render facture preview: {e}')
 
-        # show table
-        import pandas as pd
-        df = pd.DataFrame(results)
-        st.subheader("Bulk results")
-        st.dataframe(df)
+st.markdown('</div>', unsafe_allow_html=True)
 
-        # download buttons for successful merges
-        if successful:
-            st.subheader("Successful merged PDFs")
-            for fname, b in successful:
-                st.download_button(f"Download {fname}", data=b, file_name=fname, mime="application/pdf")
-            if len(successful) > 1:
-                # create zip
-                zip_io = BytesIO()
-                with zipfile.ZipFile(zip_io, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
-                    for fname, b in successful:
-                        zf.writestr(fname, b)
-                zip_io.seek(0)
-                st.download_button("Download all merged PDFs (zip)", data=zip_io.getvalue(), file_name="merged_pdfs.zip", mime="application/zip")
-        else:
-            st.warning("No successful merged PDFs (no exact matches found).")
+# Footer
+st.markdown("<div style='margin-top:18px' class='small-muted'>FusionPDF — Streamlit port. Keywords are used as-is by the regex extractor. If extraction fails, try different keywords or check PDF text extraction compatibility.</div>", unsafe_allow_html=True)
 
+# Cleanup: remove temp files on rerun? Streamlit doesn't give a direct hook; we'll attempt to remove when app stops by registering atexit if present.
+try:
+    import atexit
+    def _cleanup():
+        for p in [invoice_path, facture_path]:
+            try:
+                if p and os.path.exists(p):
+                    os.remove(p)
+            except Exception:
+                pass
+    atexit.register(_cleanup)
+except Exception:
+    pass
