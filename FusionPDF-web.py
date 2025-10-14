@@ -39,11 +39,13 @@ def extract_value_from_pdf(pdf_file_path: str, keyword: str) -> float:
         value_match = re.search(pattern, text)
         if value_match:
             raw = value_match.group(1)
-            value = float(raw.replace('.', '').replace(',', '.'))
-            return value
-        return -1
-    except Exception:
-        return -1
+        else:
+            # Fallback: try to locate a pattern like 'Total' followed by a smaller number
+            alt_match = re.search(r"Total\s*([\d]+(?:[.,]\d{3})*(?:[.,]\d{2})?)", text)
+            if alt_match:
+                raw = alt_match.group(1)
+            else:
+                return -1
 
 
 def compare_pdf_values(invoice_pdf: str, facture_pdf: str, keywords: dict) -> dict:
