@@ -28,8 +28,12 @@ def extract_value_from_pdf(pdf_file_path: str, keyword: str) -> float:
         text = re.sub(r'[\u00A0\u202F]', ' ', text)  # replace non-breaking spaces
         text = re.sub(r'\s+', ' ', text)  # collapse weird spacing/newlines
 
-        # improved regex: case-insensitive, tolerates colons, dashes, spaces, and line breaks
-        pattern = rf"(?i){re.escape(keyword)}\s*[:\-\s]*([\d]+(?:[.,]\d{{3}})*(?:[.,]\d{{2}})?)"
+        # smarter pattern: special case for VAT-like keywords
+        if keyword.lower().strip() in ["vat", "v.a.t", "ppn"]:
+            pattern = r"(?i)vat[\s:\-\(\)%]*([\d]+(?:[.,]\d{3})*(?:[.,]\d{2})?)"
+        else:
+            pattern = rf"(?i){re.escape(keyword)}[\s:\-\(\)%]*([\d]+(?:[.,]\d{{3}})*(?:[.,]\d{{2}})?)"
+        
         value_match = re.search(pattern, text)
         if value_match:
             raw = value_match.group(1)
