@@ -15,7 +15,9 @@ from pdf2image import convert_from_path
 # -------------------------
 
 def extract_value_from_pdf(pdf_file_path: str, keyword: str) -> float:
-    """Extract numeric value from PDF text following a keyword. Returns -1 if not found."""
+    """Extract a numeric value from PDF based on a keyword.
+    Returns -1 on failure or if no value found.
+    """
     if not os.path.exists(pdf_file_path) or not pdf_file_path.lower().endswith('.pdf'):
         return -1
 
@@ -24,28 +26,35 @@ def extract_value_from_pdf(pdf_file_path: str, keyword: str) -> float:
             reader = PyPDF2.PdfReader(f)
             text = "".join((page.extract_text() or "") for page in reader.pages)
 
-        # Normalize spacing and hidden characters before searching
-        text = re.sub(r'[\u00A0\u202F]', ' ', text)  # replace non-breaking spaces
-        text = re.sub(r'\s+', ' ', text)  # collapse weird spacing/newlines
-        if "vat" in keyword.lower():
-            st.text_area("DEBUG — invoice text around VAT", text[:2000])
+        # normalize spaces
+        text = re.sub(r'[\u00A0\u202F]', ' ', text)
+        text = re.sub(r'\s+', ' ', text)
 
-        # smarter pattern: special case for VAT-like keywords
+        # smarter VAT handling
         if keyword.lower().strip() in ["vat", "v.a.t", "ppn"]:
-            pattern = r"(?i)vat[\s:\-\(\)%]*([\d]+(?:[.,]\d{3})*(?:[.,]\d{2})?)"
+            pattern = r"(?i)v[\s\u00A0\u202F\.\-]*a[\s\u00A0\u202F\.\-]*t[\s\u00A0\u202F\.\-]*[\s:\-\(\)%]*([\d]+(?:[.,]\d{3})*(?:[.,]\d{2})?)"
         else:
             pattern = rf"(?i){re.escape(keyword)}[\s:\-\(\)%]*([\d]+(?:[.,]\d{{3}})*(?:[.,]\d{{2}})?)"
-        
+
         value_match = re.search(pattern, text)
+
         if value_match:
             raw = value_match.group(1)
-        else:
-            # Fallback: try to locate a pattern like 'Total' followed by a smaller number
+        elif keyword.lower().strip() in ["vat", "v.a.t", "ppn"]:
+            # fallback: catch "Total" followed by smaller number if VAT missing
             alt_match = re.search(r"Total\s*([\d]+(?:[.,]\d{3})*(?:[.,]\d{2})?)", text)
             if alt_match:
                 raw = alt_match.group(1)
             else:
                 return -1
+        else:
+            return -1
+
+        value = float(raw.replace('.', '').replace(',', '.'))
+        return value
+
+    except Exception as e:
+        return -1
 
 
 def compare_pdf_values(invoice_pdf: str, facture_pdf: str, keywords: dict) -> dict:
