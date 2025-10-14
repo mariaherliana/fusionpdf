@@ -41,26 +41,19 @@ def extract_value_from_pdf(pdf_file_path: str, keyword: str) -> float:
         if value_match:
             raw = value_match.group(1)
         elif keyword.lower().strip() in ["vat", "v.a.t", "ppn"]:
-            # Fallback: try to locate a smaller "Total" amount that follows a larger subtotal
-            all_numbers = re.findall(r"([\d]+(?:[.,]\d{3})*(?:[.,]\d{2})?)", text)
-            if len(all_numbers) >= 2:
-                # convert all numbers to float
-                nums = []
-                for n in all_numbers:
-                    try:
-                        val = float(n.replace('.', '').replace(',', '.'))
-                        nums.append(val)
-                    except:
-                        pass
-                # sort descending and pick the next smaller distinct number as VAT
-                if nums:
-                    sorted_nums = sorted(nums, reverse=True)
-                    main_total = sorted_nums[0]
-                    vat_candidates = [n for n in sorted_nums[1:] if n < main_total and n > 0]
-                    if vat_candidates:
-                        value = vat_candidates[0]
-                        return value
-            return -1
+            # Try to calculate VAT as 11% of the subtotal if available
+            # First, find subtotal in the same text
+            sub_match = re.search(
+                r"(?:Sub\s*Total|Subtotal)[^\d]{0,10}([\d]+(?:[.,]\d{3})*(?:[.,]\d{2})?)",
+                text, re.IGNORECASE
+            )
+            if sub_match:
+                raw_sub = sub_match.group(1)
+                subtotal = float(raw_sub.replace('.', '').replace(',', '.'))
+                vat_calc = round(subtotal * 0.11, 2)
+                return vat_calc
+            else:
+                return -1
         else:
             return -1
 
