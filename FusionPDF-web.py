@@ -9,6 +9,7 @@ import PyPDF2
 import pandas as pd
 from io import BytesIO
 from pdf2image import convert_from_path
+import zipline
 
 # -------------------------
 # Core Functions
@@ -158,6 +159,8 @@ def save_uploaded_to_temp(uploaded_file):
         tf.close()
         return tf.name
     
+import zipfile
+
 # -------------------------
 # Single Comparison Page
 # -------------------------
@@ -174,22 +177,36 @@ if page == "Single Comparison":
         facture_file = st.file_uploader('Facture PDF (drag & drop)', type=['pdf'])
         st.markdown('</div>', unsafe_allow_html=True)
 
-    invoice_path = save_uploaded_to_temp(invoice_file) if invoice_file else ''
-    facture_path = save_uploaded_to_temp(facture_file) if facture_file else ''
-
     with col2:
         st.markdown("<div class='app-card'><div class='section-title'>Actions</div>", unsafe_allow_html=True)
         if st.button('Compare values', use_container_width=True):
-            if not invoice_path or not facture_path:
+            if not invoice_file or not facture_file:
                 st.error('Upload both PDFs first.')
             else:
-                with st.spinner('Comparing...'):
-                    comparison_result = compare_pdf_values(invoice_path, facture_path, {
-                        'invoice_k1': invoice_k1,
-                        'invoice_k2': invoice_k2,
-                        'facture_k1': facture_k1,
-                        'facture_k2': facture_k2,
-                    })
+                # Save uploaded files to temp
+                invoice_path = save_uploaded_to_temp(invoice_file)
+                facture_path = save_uploaded_to_temp(facture_file)
+
+                progress = st.progress(0)
+                steps = 4
+
+                invoice_value1 = extract_value_from_pdf(invoice_path, invoice_k1)
+                progress.progress(25)
+                invoice_value2 = extract_value_from_pdf(invoice_path, invoice_k2)
+                progress.progress(50)
+                facture_value1 = extract_value_from_pdf(facture_path, facture_k1)
+                progress.progress(75)
+                facture_value2 = extract_value_from_pdf(facture_path, facture_k2)
+                progress.progress(100)
+
+                comparison_result = {
+                    'invoice_value1': invoice_value1,
+                    'invoice_value2': invoice_value2,
+                    'facture_value1': facture_value1,
+                    'facture_value2': facture_value2,
+                    'match': abs(invoice_value1 - facture_value1) <= 1.0 and abs(invoice_value2 - facture_value2) <= 1.0
+                }
+
                 if comparison_result['match']:
                     st.success('✅ Values match')
                 else:
@@ -206,16 +223,13 @@ if page == "Single Comparison":
                 """)
 
         if st.button('Preview PDFs', use_container_width=True):
-            invoice_path = save_uploaded_to_temp(invoice_file) if invoice_file else ''
-            facture_path = save_uploaded_to_temp(facture_file) if facture_file else ''
-    
-            if invoice_path:
+            if invoice_file:
                 st.image(preview_pdf_first_page_as_image(invoice_path), caption='Invoice — First Page', use_container_width=True)
-            if facture_path:
+            if facture_file:
                 st.image(preview_pdf_first_page_as_image(facture_path), caption='Facture — First Page', use_container_width=True)
 
         if st.button('Merge & Download', use_container_width=True, disabled=not (force_merge or comparison_result and comparison_result['match'])):
-            if not invoice_path or not facture_path:
+            if not invoice_file or not facture_file:
                 st.error("Please upload both PDFs.")
             else:
                 merged_bytes = merge_pdfs_bytes(invoice_path, facture_path)
@@ -237,54 +251,70 @@ if page == "Bulk Comparison":
     with col2:
         facture_files = st.file_uploader("Upload Facture PDFs", type="pdf", accept_multiple_files=True)
 
+    if invoice_files:
+        st.write(f"Uploaded {len(invoice_files)} invoice file(s): {[f.name for f in invoice_files]}")
+    if facture_files:
+        st.write(f"Uploaded {len(facture_files)} facture file(s): {[f.name for f in facture_files]}")
+
     if st.button("Run Bulk Comparison", use_container_width=True):
         if not invoice_files or not facture_files:
             st.error("Please upload both sets of PDFs.")
         else:
             tmp_dir = tempfile.mkdtemp()
-            invoice_paths = {os.path.splitext(f.name)[0]: os.path.join(tmp_dir, f.name) for f in invoice_files}
-            facture_paths = {os.path.splitext(f.name)[0]: os.path.join(tmp_dir, f.name) for f in facture_files}
+            total_files = min(len(invoice_files), len(facture_files))
+            progress = st.progress(0)
 
-            invoice_paths = {}
-            facture_paths = {}
-            
-            for f in invoice_files:
-                invoice_paths[os.path.splitext(f.name)[0]] = save_uploaded_to_temp(f)
-            
-            for f in facture_files:
-                facture_paths[os.path.splitext(f.name)[0]] = save_uploaded_to_temp(f)
-
-            common = sorted(set(invoice_paths.keys()) & set(facture_paths.keys()))
             results, merged_outputs = [], []
 
-            for name in common:
-                inv, fac = invoice_paths[name], facture_paths[name]
-                comp = compare_pdf_values(inv, fac, {
+            # Process each file
+            for idx, f in enumerate(invoice_files):
+                invoice_path = save_uploaded_to_temp(f)
+                
+                # Find matching facture file by name (basic assumption)
+                matching_name = os.path.splitext(f.name)[0]
+                facture_match = next((fac for fac in facture_files if os.path.splitext(fac.name)[0] == matching_name), None)
+                if not facture_match:
+                    continue
+                facture_path = save_uploaded_to_temp(facture_match)
+
+                comp = compare_pdf_values(invoice_path, facture_path, {
                     'invoice_k1': invoice_k1, 'invoice_k2': invoice_k2,
                     'facture_k1': facture_k1, 'facture_k2': facture_k2
                 })
+
                 match = comp['match']
                 status = "✅ Match" if match else ("⚠️ Forced" if force_merge else "❌ Mismatch")
                 results.append({
-                    "File": name,
+                    "File": matching_name,
                     "Invoice_1": comp["invoice_value1"],
                     "Invoice_2": comp["invoice_value2"],
                     "Facture_1": comp["facture_value1"],
                     "Facture_2": comp["facture_value2"],
                     "Status": status
                 })
-                if match or force_merge:
-                    merged = merge_pdfs_bytes(inv, fac)
-                    merged_outputs.append((name, merged))
 
+                if match or force_merge:
+                    merged_bytes = merge_pdfs_bytes(invoice_path, facture_path)
+                    merged_outputs.append((matching_name, merged_bytes))
+
+                # Update progress
+                progress.progress((idx + 1) / total_files)
+
+            st.success("✅ Bulk comparison complete!")
             df = pd.DataFrame(results)
             st.dataframe(df, use_container_width=True)
 
+            # CSV download
             csv = df.to_csv(index=False).encode("utf-8")
             st.download_button("Download Summary CSV", csv, file_name="bulk_results.csv", mime="text/csv")
 
-            st.markdown("### Download merged PDFs")
-            for name, merged_bytes in merged_outputs:
-                st.download_button(f"⬇️ Download {name}.pdf", merged_bytes, file_name=f"{name}_merged.pdf", mime="application/pdf")
+            # ZIP download for merged PDFs
+            if merged_outputs:
+                zip_buffer = BytesIO()
+                with zipfile.ZipFile(zip_buffer, "w") as zip_file:
+                    for name, merged_bytes in merged_outputs:
+                        zip_file.writestr(f"{name}_merged.pdf", merged_bytes)
+                zip_buffer.seek(0)
+                st.download_button("Download All Merged PDFs (ZIP)", zip_buffer.read(), file_name="merged_pdfs.zip", mime="application/zip")
 
 st.markdown("<div class='small-muted'>FusionPDF — Natural Mocha v3. Supports single and bulk comparisons with force merge.</div>", unsafe_allow_html=True)
