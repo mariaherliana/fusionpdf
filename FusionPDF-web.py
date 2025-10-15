@@ -227,19 +227,19 @@ if page == "Single Comparison":
             if facture_file:
                 st.image(preview_pdf_first_page_as_image(facture_path), caption='Facture — First Page', use_container_width=True)
 
-        # Reset Single Comparison
-        if st.button("Reset Single Comparison"):
-            st.session_state.pop("invoice_file", None)
-            st.session_state.pop("facture_file", None)
-            st.session_state.pop("single_comparison_result", None)
-            st.experimental_rerun()
-
         if st.button('Merge & Download', use_container_width=True, disabled=not (force_merge or comparison_result and comparison_result['match'])):
             if not invoice_file or not facture_file:
                 st.error("Please upload both PDFs.")
             else:
                 merged_bytes = merge_pdfs_bytes(invoice_path, facture_path)
                 st.download_button('Download merged PDF', merged_bytes, file_name='merged.pdf', mime='application/pdf')
+
+        # Reset Single Comparison
+        if st.button("Reset Single Comparison"):
+            st.session_state.pop("invoice_file", None)
+            st.session_state.pop("facture_file", None)
+            st.session_state.pop("single_comparison_result", None)
+            st.experimental_rerun()
 
         st.markdown('</div>', unsafe_allow_html=True)
 
@@ -261,13 +261,6 @@ if page == "Bulk Comparison":
         st.write(f"Uploaded {len(invoice_files)} invoice file(s): {[f.name for f in invoice_files]}")
     if facture_files:
         st.write(f"Uploaded {len(facture_files)} facture file(s): {[f.name for f in facture_files]}")
-
-    # Reset button
-    if st.button("Reset Bulk Comparison"):
-        st.session_state.pop("bulk_csv", None)
-        st.session_state.pop("bulk_zip", None)
-        st.session_state.pop("bulk_results", None)
-        st.experimental_rerun()
 
     # Run bulk comparison
     if st.button("Run Bulk Comparison", use_container_width=True):
@@ -333,5 +326,12 @@ if page == "Bulk Comparison":
         st.download_button("Download Summary CSV", st.session_state['bulk_csv'], file_name="bulk_results.csv", mime="text/csv")
     if 'bulk_zip' in st.session_state:
         st.download_button("Download All Merged PDFs (ZIP)", st.session_state['bulk_zip'], file_name="merged_pdfs.zip", mime="application/zip")
+
+        st.markdown("---")
+        if st.button("🔄 Reset Bulk Comparison"):
+            st.session_state.pop("bulk_csv", None)
+            st.session_state.pop("bulk_zip", None)
+            st.session_state.pop("bulk_results", None)
+            st.experimental_rerun()
 
 st.markdown("<div class='small-muted'>FusionPDF — Natural Mocha v3. Supports single and bulk comparisons with force merge.</div>", unsafe_allow_html=True)
