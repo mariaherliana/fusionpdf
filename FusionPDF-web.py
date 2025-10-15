@@ -148,7 +148,16 @@ facture_k1 = st.sidebar.text_input('Facture keyword 1', value='Harga Jual / Peng
 facture_k2 = st.sidebar.text_input('Facture keyword 2', value='Jumlah PPN (Pajak Pertambahan Nilai)')
 st.sidebar.markdown("</div>", unsafe_allow_html=True)
 
-
+def save_uploaded_to_temp(uploaded_file):
+        if uploaded_file is None:
+            return ''
+        suffix = '.pdf'
+        tf = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+        tf.write(uploaded_file.getbuffer())
+        tf.flush()
+        tf.close()
+        return tf.name
+    
 # -------------------------
 # Single Comparison Page
 # -------------------------
@@ -164,16 +173,6 @@ if page == "Single Comparison":
         invoice_file = st.file_uploader('Invoice PDF (drag & drop)', type=['pdf'])
         facture_file = st.file_uploader('Facture PDF (drag & drop)', type=['pdf'])
         st.markdown('</div>', unsafe_allow_html=True)
-
-    def save_to_temp(uploaded):
-        if not uploaded: return ''
-        tf = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
-        tf.write(uploaded.getbuffer())
-        tf.close()
-        return tf.name
-
-    invoice_path = save_to_temp(invoice_file)
-    facture_path = save_to_temp(facture_file)
 
     with col2:
         st.markdown("<div class='app-card'><div class='section-title'>Actions</div>", unsafe_allow_html=True)
@@ -240,14 +239,14 @@ if page == "Bulk Comparison":
             invoice_paths = {os.path.splitext(f.name)[0]: os.path.join(tmp_dir, f.name) for f in invoice_files}
             facture_paths = {os.path.splitext(f.name)[0]: os.path.join(tmp_dir, f.name) for f in facture_files}
 
+            invoice_paths = {}
+            facture_paths = {}
+            
             for f in invoice_files:
-                with open(invoice_paths[os.path.splitext(f.name)[0]], "wb") as out:
-                    f.seek(0)
-                    out.write(f.read())
+                invoice_paths[os.path.splitext(f.name)[0]] = save_uploaded_to_temp(f)
+            
             for f in facture_files:
-                with open(facture_paths[os.path.splitext(f.name)[0]], "wb") as out:
-                    f.seek(0)
-                    out.write(f.read())
+                facture_paths[os.path.splitext(f.name)[0]] = save_uploaded_to_temp(f)
 
             common = sorted(set(invoice_paths.keys()) & set(facture_paths.keys()))
             results, merged_outputs = [], []
