@@ -157,9 +157,6 @@ def save_uploaded_to_temp(uploaded_file):
         tf.flush()
         tf.close()
         return tf.name
-
-invoice_path = save_uploaded_to_temp(invoice_file) if invoice_file else ''
-facture_path = save_uploaded_to_temp(facture_file) if facture_file else ''
     
 # -------------------------
 # Single Comparison Page
@@ -176,6 +173,9 @@ if page == "Single Comparison":
         invoice_file = st.file_uploader('Invoice PDF (drag & drop)', type=['pdf'])
         facture_file = st.file_uploader('Facture PDF (drag & drop)', type=['pdf'])
         st.markdown('</div>', unsafe_allow_html=True)
+
+    invoice_path = save_uploaded_to_temp(invoice_file) if invoice_file else ''
+    facture_path = save_uploaded_to_temp(facture_file) if facture_file else ''
 
     with col2:
         st.markdown("<div class='app-card'><div class='section-title'>Actions</div>", unsafe_allow_html=True)
@@ -206,6 +206,9 @@ if page == "Single Comparison":
                 """)
 
         if st.button('Preview PDFs', use_container_width=True):
+            invoice_path = save_uploaded_to_temp(invoice_file) if invoice_file else ''
+            facture_path = save_uploaded_to_temp(facture_file) if facture_file else ''
+    
             if invoice_path:
                 st.image(preview_pdf_first_page_as_image(invoice_path), caption='Invoice — First Page', use_container_width=True)
             if facture_path:
