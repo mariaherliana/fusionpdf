@@ -1,24 +1,24 @@
-# streamlit_fusion_pdf_app.py
-# Streamlit adaptation of FusionPDF.py — Natural Mocha v2
-# Adds value preview card, modern UI, and force-merge control.
+# FusionPDF-web.py — Natural Mocha v3
+# Single-file Streamlit app with Single & Bulk Comparison
 
 import streamlit as st
 import tempfile
 import os
 import re
 import PyPDF2
+import pandas as pd
 from io import BytesIO
 from pdf2image import convert_from_path
 
 # -------------------------
-# Utility functions (core logic preserved)
+# Core Functions
 # -------------------------
 
 def extract_value_from_pdf(pdf_file_path: str, keyword: str) -> float:
     """Extract a numeric value from PDF based on a keyword.
-    Returns -1 on failure or if no value found.
+    Returns -1 if not found or invalid.
     """
-    if not os.path.exists(pdf_file_path) or not pdf_file_path.lower().endswith('.pdf'):
+    if not os.path.exists(pdf_file_path):
         return -1
 
     try:
@@ -30,37 +30,26 @@ def extract_value_from_pdf(pdf_file_path: str, keyword: str) -> float:
         text = re.sub(r'[\u00A0\u202F]', ' ', text)
         text = re.sub(r'\s+', ' ', text)
 
-        # smarter VAT handling
         if keyword.lower().strip() in ["vat", "v.a.t", "ppn"]:
             pattern = r"(?i)v[\s\u00A0\u202F\.\-]*a[\s\u00A0\u202F\.\-]*t[\s\u00A0\u202F\.\-]*[\s:\-\(\)%]*([\d]+(?:[.,]\d{3})*(?:[.,]\d{2})?)"
         else:
             pattern = rf"(?i){re.escape(keyword)}[\s:\-\(\)%]*([\d]+(?:[.,]\d{{3}})*(?:[.,]\d{{2}})?)"
 
-        value_match = re.search(pattern, text)
-
-        if value_match:
-            raw = value_match.group(1)
+        match = re.search(pattern, text)
+        if match:
+            raw = match.group(1)
         elif keyword.lower().strip() in ["vat", "v.a.t", "ppn"]:
-            # Try to calculate VAT as 11% of the subtotal if available
-            # First, find subtotal in the same text
-            sub_match = re.search(
-                r"(?:Sub\s*Total|Subtotal)[^\d]{0,10}([\d]+(?:[.,]\d{3})*(?:[.,]\d{2})?)",
-                text, re.IGNORECASE
-            )
-            if sub_match:
-                raw_sub = sub_match.group(1)
-                subtotal = float(raw_sub.replace('.', '').replace(',', '.'))
-                vat_calc = round(subtotal * 0.11, 2)
-                return vat_calc
+            sub = re.search(r"(?:Sub\s*Total|Subtotal)[^\d]{0,10}([\d]+(?:[.,]\d{3})*(?:[.,]\d{2})?)", text, re.IGNORECASE)
+            if sub:
+                subtotal = float(sub.group(1).replace('.', '').replace(',', '.'))
+                return round(subtotal * 0.11, 2)
             else:
                 return -1
         else:
             return -1
 
-        value = float(raw.replace('.', '').replace(',', '.'))
-        return value
-
-    except Exception as e:
+        return float(raw.replace('.', '').replace(',', '.'))
+    except Exception:
         return -1
 
 
@@ -83,25 +72,20 @@ def compare_pdf_values(invoice_pdf: str, facture_pdf: str, keywords: dict) -> di
 
 def merge_pdfs_bytes(pdf1_path: str, pdf2_path: str) -> bytes:
     """Merge two PDFs and return as bytes."""
-    pdf_writer = PyPDF2.PdfWriter()
+    writer = PyPDF2.PdfWriter()
     with open(pdf1_path, 'rb') as f1, open(pdf2_path, 'rb') as f2:
-        r1 = PyPDF2.PdfReader(f1)
-        r2 = PyPDF2.PdfReader(f2)
-        for p in r1.pages:
-            pdf_writer.add_page(p)
-        for p in r2.pages:
-            pdf_writer.add_page(p)
-        out_io = BytesIO()
-        pdf_writer.write(out_io)
-        out_io.seek(0)
-        return out_io.read()
+        for p in PyPDF2.PdfReader(f1).pages:
+            writer.add_page(p)
+        for p in PyPDF2.PdfReader(f2).pages:
+            writer.add_page(p)
+    out = BytesIO()
+    writer.write(out)
+    out.seek(0)
+    return out.read()
 
 
 def preview_pdf_first_page_as_image(pdf_path: str, dpi: int = 100) -> BytesIO:
-    """Convert first page of PDF to image (BytesIO)."""
     images = convert_from_path(pdf_path, dpi=dpi, first_page=1, last_page=1)
-    if not images:
-        raise RuntimeError('No images rendered')
     bio = BytesIO()
     images[0].save(bio, format='PNG')
     bio.seek(0)
@@ -109,12 +93,12 @@ def preview_pdf_first_page_as_image(pdf_path: str, dpi: int = 100) -> BytesIO:
 
 
 # -------------------------
-# Streamlit UI Setup
+# Streamlit Setup
 # -------------------------
 
-st.set_page_config(page_title='FusionPDF — Mocha', layout='wide')
+st.set_page_config(page_title="FusionPDF — Mocha", layout="wide")
 
-MOCHA_CSS = r"""
+MOCHA_CSS = """
 <style>
 :root {
   --cream: #f6f0e9;
@@ -130,190 +114,166 @@ html, body, [class*="stApp"] {
   color: var(--coffee);
   font-family: "Inter", sans-serif;
 }
-.section-title {
-  font-size: 20px;
-  font-weight: 700;
-  margin-bottom: 10px;
-}
 .app-card {
   background: var(--card);
   border-radius: 16px;
   padding: 18px;
   box-shadow: 0 4px 12px rgba(58,47,43,0.15);
 }
-.small-muted {
-  color: var(--muted);
-  font-size: 13px;
+.section-title {
+  font-size: 20px;
+  font-weight: 700;
+  margin-bottom: 10px;
 }
-.btn-cute {
-  background-color: var(--accent);
-  color: #fff;
-  border: none;
-  border-radius: 10px;
-  padding: 10px 16px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-.btn-cute:hover {
-  background-color: var(--accent-rose);
-}
-.success-box {
-  background-color: var(--accent-sage);
-  color: var(--coffee);
-  padding: 10px;
-  border-radius: 8px;
-  margin-top: 10px;
-}
-.warning-box {
-  background-color: var(--accent-rose);
-  color: var(--coffee);
-  padding: 10px;
-  border-radius: 8px;
-  margin-top: 10px;
-}
-.value-table {
-  display: flex;
-  justify-content: space-between;
-  margin-top: 12px;
-  background-color: #f9f3eb;
-  border-radius: 10px;
-  padding: 12px 16px;
-  box-shadow: 0 1px 4px rgba(58,47,43,0.1);
-}
-.value-column {
-  flex: 1;
-  text-align: right;
-  font-family: "Courier New", monospace;
-  font-size: 14px;
-  color: var(--coffee);
-}
-.value-header {
-  text-align: right;
-  font-weight: 600;
-  color: var(--accent);
-  font-size: 15px;
-  margin-bottom: 4px;
-}
-.value-divider {
-  width: 1px;
-  background-color: #d9cbbb;
-  margin: 0 12px;
-}
+.small-muted { color: var(--muted); font-size: 13px; }
 </style>
 """
-
 st.markdown(MOCHA_CSS, unsafe_allow_html=True)
 
-# Sidebar
-with st.sidebar:
-    st.markdown("<div class='app-card'><div class='section-title'>Keywords</div>", unsafe_allow_html=True)
-    invoice_k1 = st.text_input('Invoice keyword 1', value='Sub Total')
-    invoice_k2 = st.text_input('Invoice keyword 2', value='VAT')
-    facture_k1 = st.text_input('Facture keyword 1', value='Harga Jual / Penggantian / Uang Muka / Termin')
-    facture_k2 = st.text_input('Facture keyword 2', value='Jumlah PPN (Pajak Pertambahan Nilai)')
-    st.markdown("<hr>", unsafe_allow_html=True)
-    force_merge = st.checkbox('Force merge even if values don’t match', value=False)
-    st.markdown("<div class='small-muted'>Used to extract and compare numeric values following these keywords.</div></div>", unsafe_allow_html=True)
+# -------------------------
+# Sidebar navigation
+# -------------------------
 
-# Layout
-col1, col2 = st.columns(2)
-comparison_result = None
+page = st.sidebar.radio("Navigation", ["Single Comparison", "Bulk Comparison"])
+st.sidebar.markdown("<hr>", unsafe_allow_html=True)
+force_merge = st.sidebar.checkbox("Force merge even if values don’t match", value=False)
 
-with col1:
-    st.markdown("<div class='app-card'><div class='section-title'>Upload PDFs</div>", unsafe_allow_html=True)
-    invoice_file = st.file_uploader('Invoice PDF (drag & drop)', type=['pdf'])
-    facture_file = st.file_uploader('Facture PDF (drag & drop)', type=['pdf'])
-    st.markdown('</div>', unsafe_allow_html=True)
+# Keyword fields (shared)
+st.sidebar.markdown("<div class='app-card'><div class='section-title'>Keywords</div>", unsafe_allow_html=True)
+invoice_k1 = st.sidebar.text_input('Invoice keyword 1', value='Sub Total')
+invoice_k2 = st.sidebar.text_input('Invoice keyword 2', value='VAT')
+facture_k1 = st.sidebar.text_input('Facture keyword 1', value='Harga Jual / Penggantian / Uang Muka / Termin')
+facture_k2 = st.sidebar.text_input('Facture keyword 2', value='Jumlah PPN (Pajak Pertambahan Nilai)')
+st.sidebar.markdown("</div>", unsafe_allow_html=True)
 
-def save_uploaded_to_temp(uploaded_file) -> str:
-    if uploaded_file is None:
-        return ''
-    suffix = '.pdf'
-    tf = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
-    tf.write(uploaded_file.getbuffer())
-    tf.flush()
-    tf.close()
-    return tf.name
 
-invoice_path = save_uploaded_to_temp(invoice_file) if invoice_file else ''
-facture_path = save_uploaded_to_temp(facture_file) if facture_file else ''
+# -------------------------
+# Single Comparison Page
+# -------------------------
 
-with col2:
-    st.markdown("<div class='app-card'><div class='section-title'>Actions</div>", unsafe_allow_html=True)
-    if st.button('Compare values', key='compare', use_container_width=True):
-        if not invoice_path or not facture_path:
-            st.error('Please upload both PDFs first.')
-        else:
-            with st.spinner('Comparing...'):
-                comparison_result = compare_pdf_values(invoice_path, facture_path, {
-                    'invoice_k1': invoice_k1,
-                    'invoice_k2': invoice_k2,
-                    'facture_k1': facture_k1,
-                    'facture_k2': facture_k2,
-                })
-            if comparison_result['match']:
-                st.markdown("<div class='success-box'>Values match ✅</div>", unsafe_allow_html=True)
+if page == "Single Comparison":
+    st.title("FusionPDF — Single Comparison")
+
+    col1, col2 = st.columns(2)
+    comparison_result = None
+
+    with col1:
+        st.markdown("<div class='app-card'><div class='section-title'>Upload PDFs</div>", unsafe_allow_html=True)
+        invoice_file = st.file_uploader('Invoice PDF (drag & drop)', type=['pdf'])
+        facture_file = st.file_uploader('Facture PDF (drag & drop)', type=['pdf'])
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    def save_to_temp(uploaded):
+        if not uploaded: return ''
+        tf = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+        tf.write(uploaded.getbuffer())
+        tf.close()
+        return tf.name
+
+    invoice_path = save_to_temp(invoice_file)
+    facture_path = save_to_temp(facture_file)
+
+    with col2:
+        st.markdown("<div class='app-card'><div class='section-title'>Actions</div>", unsafe_allow_html=True)
+        if st.button('Compare values', use_container_width=True):
+            if not invoice_path or not facture_path:
+                st.error('Upload both PDFs first.')
             else:
-                st.markdown("<div class='warning-box'>Values do not match ⚠️</div>", unsafe_allow_html=True)
+                with st.spinner('Comparing...'):
+                    comparison_result = compare_pdf_values(invoice_path, facture_path, {
+                        'invoice_k1': invoice_k1,
+                        'invoice_k2': invoice_k2,
+                        'facture_k1': facture_k1,
+                        'facture_k2': facture_k2,
+                    })
+                if comparison_result['match']:
+                    st.success('✅ Values match')
+                else:
+                    st.warning('⚠️ Values do not match')
 
-            # --- Value display table ---
-            st.markdown("""
-            <div class='value-table'>
-                <div class='value-column'>
-                    <div class='value-header'>Invoice</div>
-                    <div>{:.2f}</div>
-                    <div>{:.2f}</div>
-                </div>
-                <div class='value-divider'></div>
-                <div class='value-column'>
-                    <div class='value-header'>Facture</div>
-                    <div>{:.2f}</div>
-                    <div>{:.2f}</div>
-                </div>
-            </div>
-            """.format(
-                comparison_result['invoice_value1'],
-                comparison_result['invoice_value2'],
-                comparison_result['facture_value1'],
-                comparison_result['facture_value2']
-            ), unsafe_allow_html=True)
+                st.markdown(f"""
+                **Invoice**  
+                {comparison_result['invoice_value1']:.2f}  
+                {comparison_result['invoice_value2']:.2f}  
 
-    if st.button('Preview PDFs', key='preview', use_container_width=True):
-        if invoice_path:
-            try:
+                **Facture**  
+                {comparison_result['facture_value1']:.2f}  
+                {comparison_result['facture_value2']:.2f}
+                """)
+
+        if st.button('Preview PDFs', use_container_width=True):
+            if invoice_path:
                 st.image(preview_pdf_first_page_as_image(invoice_path), caption='Invoice — First Page', use_container_width=True)
-            except Exception as e:
-                st.error(f'Invoice preview failed: {e}')
-        if facture_path:
-            try:
+            if facture_path:
                 st.image(preview_pdf_first_page_as_image(facture_path), caption='Facture — First Page', use_container_width=True)
-            except Exception as e:
-                st.error(f'Facture preview failed: {e}')
-    st.markdown('</div>', unsafe_allow_html=True)
 
-# Merge Section
-st.markdown("<div class='app-card' style='margin-top:18px'><div class='section-title'>Merge PDFs</div>", unsafe_allow_html=True)
+        if st.button('Merge & Download', use_container_width=True, disabled=not (force_merge or comparison_result and comparison_result['match'])):
+            if not invoice_path or not facture_path:
+                st.error("Please upload both PDFs.")
+            else:
+                merged_bytes = merge_pdfs_bytes(invoice_path, facture_path)
+                st.download_button('Download merged PDF', merged_bytes, file_name='merged.pdf', mime='application/pdf')
 
-can_merge = False
-if comparison_result:
-    can_merge = comparison_result['match'] or force_merge
-elif force_merge:
-    can_merge = True
+        st.markdown('</div>', unsafe_allow_html=True)
 
-merge_button = st.button('Merge & Download', key='merge', use_container_width=True, disabled=not can_merge)
 
-if merge_button:
-    if not invoice_path or not facture_path:
-        st.error('Please upload both PDFs.')
-    else:
-        try:
-            merged_bytes = merge_pdfs_bytes(invoice_path, facture_path)
-            st.success('Merged successfully!')
-            st.download_button('Download merged PDF', merged_bytes, file_name='merged.pdf', mime='application/pdf')
-        except Exception as e:
-            st.error(f'Merge failed: {e}')
+# -------------------------
+# Bulk Comparison Page
+# -------------------------
 
-st.markdown('</div>', unsafe_allow_html=True)
+if page == "Bulk Comparison":
+    st.title("FusionPDF — Bulk Comparison")
 
-st.markdown("<div class='small-muted' style='margin-top:12px;'>FusionPDF — Natural Mocha version. Values must match exactly unless “Force merge” is checked.</div>", unsafe_allow_html=True)
+    col1, col2 = st.columns(2)
+    with col1:
+        invoice_files = st.file_uploader("Upload Invoice PDFs", type="pdf", accept_multiple_files=True)
+    with col2:
+        facture_files = st.file_uploader("Upload Facture PDFs", type="pdf", accept_multiple_files=True)
+
+    if st.button("Run Bulk Comparison", use_container_width=True):
+        if not invoice_files or not facture_files:
+            st.error("Please upload both sets of PDFs.")
+        else:
+            tmp_dir = tempfile.mkdtemp()
+            invoice_paths = {os.path.splitext(f.name)[0]: os.path.join(tmp_dir, f.name) for f in invoice_files}
+            facture_paths = {os.path.splitext(f.name)[0]: os.path.join(tmp_dir, f.name) for f in facture_files}
+
+            for f in invoice_files:
+                with open(invoice_paths[os.path.splitext(f.name)[0]], "wb") as out: out.write(f.read())
+            for f in facture_files:
+                with open(facture_paths[os.path.splitext(f.name)[0]], "wb") as out: out.write(f.read())
+
+            common = sorted(set(invoice_paths.keys()) & set(facture_paths.keys()))
+            results, merged_outputs = [], []
+
+            for name in common:
+                inv, fac = invoice_paths[name], facture_paths[name]
+                comp = compare_pdf_values(inv, fac, {
+                    'invoice_k1': invoice_k1, 'invoice_k2': invoice_k2,
+                    'facture_k1': facture_k1, 'facture_k2': facture_k2
+                })
+                match = comp['match']
+                status = "✅ Match" if match else ("⚠️ Forced" if force_merge else "❌ Mismatch")
+                results.append({
+                    "File": name,
+                    "Invoice_1": comp["invoice_value1"],
+                    "Invoice_2": comp["invoice_value2"],
+                    "Facture_1": comp["facture_value1"],
+                    "Facture_2": comp["facture_value2"],
+                    "Status": status
+                })
+                if match or force_merge:
+                    merged = merge_pdfs_bytes(inv, fac)
+                    merged_outputs.append((name, merged))
+
+            df = pd.DataFrame(results)
+            st.dataframe(df, use_container_width=True)
+
+            csv = df.to_csv(index=False).encode("utf-8")
+            st.download_button("Download Summary CSV", csv, file_name="bulk_results.csv", mime="text/csv")
+
+            st.markdown("### Download merged PDFs")
+            for name, merged_bytes in merged_outputs:
+                st.download_button(f"⬇️ Download {name}.pdf", merged_bytes, file_name=f"{name}_merged.pdf", mime="application/pdf")
+
+st.markdown("<div class='small-muted'>FusionPDF — Natural Mocha v3. Supports single and bulk comparisons with force merge.</div>", unsafe_allow_html=True)
