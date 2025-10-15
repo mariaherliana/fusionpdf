@@ -102,7 +102,7 @@ def save_uploaded_to_temp(uploaded_file):
 # Streamlit Setup
 # -------------------------
 
-st.set_page_config(page_title="FusionPDF — Mocha", layout="wide")
+st.set_page_config(page_icon="📔", page_title="FusionPDF — Mocha", layout="wide")
 
 MOCHA_CSS = """
 <style>
