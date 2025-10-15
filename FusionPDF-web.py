@@ -239,7 +239,7 @@ if page == "Single Comparison":
             st.session_state.pop("invoice_file", None)
             st.session_state.pop("facture_file", None)
             st.session_state.pop("single_comparison_result", None)
-            st.experimental_rerun()
+            st.rerun()
 
         st.markdown('</div>', unsafe_allow_html=True)
 
@@ -332,6 +332,6 @@ if page == "Bulk Comparison":
             st.session_state.pop("bulk_csv", None)
             st.session_state.pop("bulk_zip", None)
             st.session_state.pop("bulk_results", None)
-            st.experimental_rerun()
+            st.rerun()
 
 st.markdown("<div class='small-muted'>FusionPDF — Natural Mocha v3. Supports single and bulk comparisons with force merge.</div>", unsafe_allow_html=True)
