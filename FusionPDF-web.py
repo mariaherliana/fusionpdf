@@ -297,7 +297,7 @@ if page == "Bulk Comparison":
                     merged_outputs.append((matching_name, merged_bytes))
 
                 # Update progress
-                progress.progress((idx + 1) / total_files)
+                progress.progress(int((idx + 1) / total_files * 100))
 
             st.success("✅ Bulk comparison complete!")
             df = pd.DataFrame(results)
