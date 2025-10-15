@@ -52,7 +52,6 @@ def extract_value_from_pdf(pdf_file_path: str, keyword: str) -> float:
     except Exception:
         return -1
 
-
 def compare_pdf_values(invoice_pdf: str, facture_pdf: str, keywords: dict) -> dict:
     """Compare extracted values between invoice and facture."""
     invoice_value1 = extract_value_from_pdf(invoice_pdf, keywords.get('invoice_k1', ''))
@@ -60,7 +59,10 @@ def compare_pdf_values(invoice_pdf: str, facture_pdf: str, keywords: dict) -> di
     facture_value1 = extract_value_from_pdf(facture_pdf, keywords.get('facture_k1', ''))
     facture_value2 = extract_value_from_pdf(facture_pdf, keywords.get('facture_k2', ''))
 
-    match = (invoice_value1 == facture_value1) and (invoice_value2 == facture_value2)
+    def almost_equal(a, b, tol=1.0):
+        return a != -1 and b != -1 and abs(a - b) <= tol
+    
+    match = almost_equal(invoice_value1, facture_value1) and almost_equal(invoice_value2, facture_value2)
     return {
         'invoice_value1': invoice_value1,
         'invoice_value2': invoice_value2,
@@ -239,9 +241,13 @@ if page == "Bulk Comparison":
             facture_paths = {os.path.splitext(f.name)[0]: os.path.join(tmp_dir, f.name) for f in facture_files}
 
             for f in invoice_files:
-                with open(invoice_paths[os.path.splitext(f.name)[0]], "wb") as out: out.write(f.read())
+                with open(invoice_paths[os.path.splitext(f.name)[0]], "wb") as out:
+                    f.seek(0)
+                    out.write(f.read())
             for f in facture_files:
-                with open(facture_paths[os.path.splitext(f.name)[0]], "wb") as out: out.write(f.read())
+                with open(facture_paths[os.path.splitext(f.name)[0]], "wb") as out:
+                    f.seek(0)
+                    out.write(f.read())
 
             common = sorted(set(invoice_paths.keys()) & set(facture_paths.keys()))
             results, merged_outputs = [], []
