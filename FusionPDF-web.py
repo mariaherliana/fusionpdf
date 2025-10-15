@@ -1,15 +1,16 @@
 # FusionPDF-web.py — Natural Mocha v3
 # Single-file Streamlit app with Single & Bulk Comparison
 
-import streamlit as st
-import tempfile
 import os
 import re
+import tempfile
+from io import BytesIO
+import zipfile
+
+import streamlit as st
 import PyPDF2
 import pandas as pd
-from io import BytesIO
 from pdf2image import convert_from_path
-import zipline
 
 # -------------------------
 # Core Functions
