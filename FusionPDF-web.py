@@ -157,6 +157,9 @@ def save_uploaded_to_temp(uploaded_file):
         tf.flush()
         tf.close()
         return tf.name
+
+invoice_path = save_uploaded_to_temp(invoice_file) if invoice_file else ''
+facture_path = save_uploaded_to_temp(facture_file) if facture_file else ''
     
 # -------------------------
 # Single Comparison Page
