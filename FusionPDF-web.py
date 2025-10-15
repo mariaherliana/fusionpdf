@@ -158,8 +158,6 @@ def save_uploaded_to_temp(uploaded_file):
         tf.flush()
         tf.close()
         return tf.name
-    
-import zipfile
 
 # -------------------------
 # Single Comparison Page
